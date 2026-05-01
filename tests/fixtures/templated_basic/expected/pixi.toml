@@ -1,0 +1,4 @@
+[workspace]
+name = "rover"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
