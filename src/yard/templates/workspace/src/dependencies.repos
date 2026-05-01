@@ -1,0 +1,8 @@
+# vcs import manifest. Run `pixi run import` to fetch into src/deps/.
+#
+#   repositories:
+#     pkg_name:
+#       type: git
+#       url: https://github.com/org/repo.git
+#       version: main
+repositories: {}

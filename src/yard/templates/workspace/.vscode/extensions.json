@@ -1,0 +1,16 @@
+{
+    "recommendations": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "redhat.vscode-xml",
+        "redhat.vscode-yaml",
+        "streetsidesoftware.code-spell-checker",
+        "ms-vscode.cmake-tools"
+    ],
+    "unwantedRecommendations": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        "ms-azuretools.vscode-docker"
+    ]
+}

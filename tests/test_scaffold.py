@@ -12,6 +12,9 @@ from yard.scaffold import Context, Verbatim
 from yard.scaffold.render import create_env
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+SNAPSHOTS_DIR = Path(__file__).parent / "snapshots"
+WORKSPACE_TEMPLATE = Path(__file__).resolve().parents[1] / "src" / "yard" / "templates" / "workspace"
+WORKSPACE_VARIABLES = {"workspace_name": "rover", "distro": "jazzy"}
 
 
 def _load_variables(fixture_dir: Path) -> dict[str, Any]:
@@ -103,6 +106,20 @@ def test_missing_spec_raises(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         scaffold.apply(template_dir, tmp_path / "out", {})
+
+
+def test_workspace_template_matches_snapshot(tmp_path: Path) -> None:
+    """Render the real workspace template and diff against tests/snapshots/workspace.
+
+    To regenerate the snapshot after intentional template changes:
+        rm -rf tests/snapshots/workspace
+        pixi run python -c "from pathlib import Path; from yard.scaffold import apply; \
+            d = Path('tests/snapshots/workspace'); d.mkdir(parents=True); \
+            apply(Path('src/yard/templates/workspace'), d, \
+                  {'workspace_name': 'rover', 'distro': 'jazzy'})"
+    """
+    scaffold.apply(WORKSPACE_TEMPLATE, tmp_path, WORKSPACE_VARIABLES)
+    _assert_tree_matches(tmp_path, SNAPSHOTS_DIR / "workspace")
 
 
 def test_handler_apply_directly(tmp_path: Path) -> None:

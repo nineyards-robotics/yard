@@ -1,0 +1,31 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "pixi run build",
+            "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "test",
+            "type": "shell",
+            "command": "pixi run test",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "import",
+            "type": "shell",
+            "command": "pixi run import",
+            "problemMatcher": []
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "pixi run clean",
+            "problemMatcher": []
+        }
+    ]
+}

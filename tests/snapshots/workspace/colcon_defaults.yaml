@@ -1,0 +1,18 @@
+build:
+  symlink-install: true
+  base-paths: [src]
+  continue-on-error: true
+  cmake-args:
+    - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    - -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+  event-handlers:
+    - console_cohesion+
+    - console_start_end+
+    - console_package_list+
+    - summary+
+    - status+
+    - store_result+  # required for `colcon build --packages-select-build-failed`
+    - log+
+
+test:
+  base-paths: [src]

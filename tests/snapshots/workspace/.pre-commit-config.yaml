@@ -1,0 +1,32 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: check-xml
+  - id: check-yaml
+  - id: end-of-file-fixer
+  - id: trailing-whitespace
+  - id: mixed-line-ending
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.9.0
+  hooks:
+  - id: ruff
+    args: [--fix]
+  - id: ruff-format
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: v22.1.1
+  hooks:
+  - id: clang-format
+- repo: https://github.com/cheshirekow/cmake-format-precommit
+  rev: v0.6.13
+  hooks:
+  - id: cmake-format
+- repo: https://github.com/executablebooks/mdformat
+  rev: 0.7.21
+  hooks:
+  - id: mdformat
+    additional_dependencies:
+    - mdformat-mkdocs>=2.0.11
+    - mdformat-tables>=0.4.1
+    - mdformat-simple-breaks>=0.0.1
+    - mdformat-gfm>=0.3.6

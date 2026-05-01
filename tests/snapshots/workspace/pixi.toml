@@ -1,6 +1,6 @@
 [workspace]
-name = "{{ workspace_name }}"
-channels = ["https://prefix.dev/robostack-{{ distro }}", "https://prefix.dev/conda-forge"]
+name = "rover"
+channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
 platforms = ["linux-64"]
 
 # =============================================================================
@@ -31,13 +31,13 @@ pip = ">=26.0.1,<27"
 libgl-devel = "*"
 sysroot_linux-64 = ">=2.39"
 
-# ROS 2 {{ distro }} metapackages
-ros-{{ distro }}-desktop = "*"
-ros-{{ distro }}-simulation = "*"
-ros-{{ distro }}-rmw-cyclonedds-cpp = "*"
-ros-{{ distro }}-ros-testing = "*"
-ros-{{ distro }}-osrf-testing-tools-cpp = "*"
-ros-{{ distro }}-python-cmake-module = "*"
+# ROS 2 jazzy metapackages
+ros-jazzy-desktop = "*"
+ros-jazzy-simulation = "*"
+ros-jazzy-rmw-cyclonedds-cpp = "*"
+ros-jazzy-ros-testing = "*"
+ros-jazzy-osrf-testing-tools-cpp = "*"
+ros-jazzy-python-cmake-module = "*"
 
 # --- BEGIN AUTO-GENERATED DEPS (do not edit manually) ---
 # Populated by `yard sync-deps` from package.xml files under src/.
