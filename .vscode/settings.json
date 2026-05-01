@@ -1,11 +1,3 @@
 {
-  "python-envs.pythonProjects": [
-    {
-      "path": ".",
-      "envManager": "ms-python.python:pixi",
-      "packageManager": "ms-python.python:pixi"
-    }
-  ],
-  "python-envs.defaultEnvManager": "ms-python.python:pixi",
-  "python-envs.defaultPackageManager": "ms-python.python:pixi"
+  "python.defaultInterpreterPath": "${workspaceFolder}/.pixi/envs/default/bin/python"
 }
