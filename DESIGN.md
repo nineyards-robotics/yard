@@ -8,30 +8,73 @@
 
 yard is implemented in **Rust**. The deciding factor is the config-file mechanic (see below): yard round-trips shared TOML files like `pixi.toml` and `pyproject.toml` and must preserve user-authored comments, whitespace, and key order through every edit. Rust's `toml_edit` is purpose-built for format-preserving edits — it parses TOML into a syntax tree where mutations leave the surrounding text untouched. Go's mainstream TOML libraries decode/encode through structs and lose all of that, and writing a comment-preserving layer in Go would be substantial infrastructure work. Rust also gives us a single static binary with no runtime, which avoids Python-environment collisions in users' ROS workspaces.
 
+## Distribution and version sync
+
+yard is a **standalone binary**. It cannot be installed via any environment manager (pixi, nix, conda, devcontainer, ...) because yard *manages* those environments — installing yard inside one would be circular. yard sits at the same tier as `pixi`, `mise`, `rustup`, `direnv`: a tool that bootstraps a workspace and is itself bootstrapped independently.
+
+### Installation
+
+The primary install channel is a single-source script that fetches a pre-built binary from GitHub releases:
+
+```bash
+curl -fsSL https://yard.sh/install | sh                           # latest
+curl -fsSL https://yard.sh/install | sh -s -- --version 0.5.2     # pinned to a specific version
+YARD_VERSION=0.5.2 curl -fsSL https://yard.sh/install | sh        # via env var
+```
+
+Additional channels (`cargo install yard`, homebrew, scoop, AUR, ...) come later as the project matures.
+
+### The `.yard/` folder
+
+Every yard workspace has a `.yard/` folder for yard's own state. v1 contents:
+
+```
+.yard/
+  state.toml      ← committed: records what yard last did to this workspace
+```
+
+```toml
+# .yard/state.toml
+last_applied_version = "0.5.2"
+last_applied_at      = "2026-05-10T12:34:56Z"
+```
+
+The folder is committed to git so teams stay synchronized. It leaves room for non-committed caches later (`.yard/cache/`, gitignored).
+
+### Warn on version mismatch
+
+On every `yard apply`:
+
+1. yard reads `.yard/state.toml` and compares `last_applied_version` to the running binary's version.
+2. If they differ, yard warns: *"yard 0.6.0 is running, but `.yard/state.toml` says last apply was 0.5.2 — output may differ from your teammate's. To match, install 0.5.2 with: `curl -fsSL https://yard.sh/install | sh -s -- --version 0.5.2`."*
+3. The apply proceeds anyway with the running binary's logic.
+4. On success, yard writes its own version into `.yard/state.toml`.
+
+This is **informational, not blocking**. Teams coordinate version upgrades by one member upgrading their binary, running apply, and committing the new `state.toml`. If we later find teams want a hard enforced pin, that's an additive change: a `yard_version` field in `yard.toml` that errors on mismatch.
+
 ## Architecture overview
 
 ```
 yard.toml                      ← input: user's declaration of intent
    │
    ▼
-yard core
-   │   loads the preset matching `preset_version`
+yard core                      ← deserialize, validate
+   │
    ▼
-Preset                         ← versioned bundle of opinions, decoupled from binary
-   │   yields typed Desired values
-   ▼
-Adaptors                       ← per config-type, compiled into binary
-   │   reconcile Desired against existing file contents
+Modules                        ← each reads config, emits typed Contributions
+   │
+   ▼  (grouped by target adaptor, then merged)
+Adaptors                       ← per config-type
+   │   reconcile typed Desired against existing file contents
    ▼
 Managed output files           ← pixi.toml, .gitignore, .pre-commit-config.yaml, ...
 ```
 
-The two halves of yard are deliberately separated:
+All of yard's logic and opinions ship in the binary. There is no separate "preset" abstraction — cross-team consistency is achieved by everyone running the same yard binary version, with the version-mismatch warning above flagging drift.
 
-- The **binary** holds the *mechanic*: adaptor logic, parsing, marker handling, file IO, the CLI.
-- The **preset** holds the *opinions*: what Python version, what dependencies, what aliases. It is versioned independently and pinned in `yard.toml`. Two team members on different yard binaries see identical files as long as both binaries support the preset format and they reference the same `preset_version`.
+Inside the binary, opinions are organized into **modules**. Modules read the parsed `yard.toml` and emit typed contributions; the engine groups contributions per target adaptor, merges them, and hands each adaptor a typed `Desired`. The module abstraction is invisible to the user — they see only top-level configuration sections in `yard.toml`, never a `[modules.*]` block. See the Modules section below.
 
-For v1 the preset is compiled into the binary. The `Preset` type and its loader are designed so that remote loading (HTTP, git ref, OCI) is a purely additive future feature — the rest of yard sees no difference.
+Adaptors are independent of modules: each adaptor is keyed on the config type of the file it manages, accepts a typed `Desired`, and reconciles it against the existing file. Adding a new managed file type is purely a new adaptor implementation; adding a new opinion is purely a new module.
 
 ## Workspace declaration: `yard.toml`
 
@@ -39,29 +82,80 @@ For v1 the preset is compiled into the binary. The `Preset` type and its loader 
 
 ### Smart defaults
 
-The guiding principle: a minimal `yard.toml` should produce a well-setup, working workspace. Users add keys only when they want to deviate from the preset's defaults. The smallest possible file is essentially just a preset version pin:
+The guiding principle: a minimal `yard.toml` should produce a well-setup, working workspace. Users add keys only when they want to deviate from a module's defaults. The smallest sensible file declares only the required core values:
 
 ```toml
-preset_version = "1"
+ros_distro = "jazzy"
 ```
 
-### Schema (v1)
+### Schema
 
-| Key              | Required | Default          | Notes                                                        |
-|------------------|----------|------------------|--------------------------------------------------------------|
-| `preset_version` | yes      | —                | Pins the preset version for team sync. No implicit default.  |
-| `preset`         | no       | `"yard-default"` | Named preset. Reserved for future when multiple presets ship. |
+`yard.toml` deserializes into a single `YardConfig` struct, with `#[serde(deny_unknown_fields)]` at every level — an unrecognised top-level key is an error, ideally with a "did you mean X?" hint. This is the only typo-detection mechanism: there is no fuzzy matching at runtime.
 
-Future fields (ROS distro, env manager choice, package list, etc.) will land here as the preset model gains them. New fields **always** default when absent — yard never auto-rewrites `yard.toml` to add fields the user didn't ask for. If the user wants non-default behaviour on a new field, they add it from documentation.
+The schema is the union of:
+
+- **Yard-core values** — shared inputs read by multiple modules. v1 has `ros_distro` (required, no default).
+- **Module-config blocks** — one top-level key per module that takes user options. Each is either a bool (`pre_commit = true` to enable with defaults, `pre_commit = false` to disable) or a table (`[pre_commit]` with named options) via a custom deserialize wrapper so both forms are ergonomic.
+
+Concrete v1 fields are listed in the v1 scope section. New fields **always** default when absent — yard never auto-rewrites `yard.toml` to add fields the user didn't ask for. If the user wants non-default behaviour on a new field, they add it from documentation.
 
 ### When yard writes `yard.toml`
 
 Only on explicit user action:
 
 - `yard init` writes the starter file.
-- Future imperative verbs (e.g. a hypothetical `yard preset bump`) may write to it. These are user-invoked and obvious, never reconciliation-driven.
+- Future imperative verbs may write to it. These are user-invoked and obvious, never reconciliation-driven.
 
 The reconciliation engine never touches `yard.toml`.
+
+## Modules
+
+Yard's opinions are organized internally into **modules**. A module is essentially a pure function from the parsed config to a list of typed contributions:
+
+```rust
+struct Module {
+    id: &'static str,                                 // diagnostics only
+    contribute: fn(&YardConfig) -> Vec<Contribution>,
+}
+```
+
+Modules are invisible to the user — there is no `[modules.*]` section in `yard.toml`. Users see only top-level configuration sections; each module reads whatever fields it cares about from the deserialized config and decides what to emit. The trade-off (vs. an explicit module abstraction in `yard.toml`) is that "what's available to configure" is a documentation concern, not something the user discovers from the file shape.
+
+### Always-on, always-emit
+
+Every module runs on every `yard apply`. There is no engine-level enable/disable. A module that "doesn't apply" simply returns an empty `Vec<Contribution>` — for example, the pre-commit module returns nothing if `pre_commit = false` (or absent). This keeps the trait surface minimal: the registry is just an ordered slice of `Module` values in the binary.
+
+### Contributions
+
+A `Contribution` is a typed fragment targeting a specific adaptor:
+
+```rust
+enum Contribution {
+    Pixi(PixiContribution),
+    PreCommit(PreCommitContribution),
+    Gitignore(GitignoreContribution),
+    // new variants as new adaptors land
+}
+```
+
+Each `*Contribution` type is **additive**: a `PixiContribution` carries the deps, env vars, tasks, etc. that the contributing module wants in `pixi.toml`. Modules emit fragments; they never construct full `Desired` values.
+
+### Merge
+
+For each adaptor, the engine collects every contribution targeting it and merges them into the adaptor's `Desired`:
+
+- **Maps and lists** (deps, env vars, ignore lines, hook IDs) union.
+- **Scalars** (Python version, single-valued settings) error if two modules disagree, naming both modules and the offending key. Conflicts are loud, not silent.
+
+If an adaptor receives no contributions, it is not run and its output file is not created. This is what makes the set of managed files dynamic: which files yard touches depends entirely on which modules emit what.
+
+### Ordering
+
+The module registry is an ordered slice. Order is fixed by the binary, not by `yard.toml`. Iteration order does not affect semantics (additive merges are commutative; scalar conflicts error rather than last-writer-wins) but does fix the order of items in the merged `Desired` for deterministic diffs.
+
+### Future: user-authored modules
+
+For v1, all modules are compiled into the binary. User-authored or remotely-loaded modules are an additive future feature — the engine sees no difference between a built-in module and a dynamically-loaded one, since both reduce to the same `fn(&YardConfig) -> Vec<Contribution>` shape.
 
 ## Configuration file management
 
@@ -203,16 +297,16 @@ Re-running `yard apply` against the same `preset_version` is also valid and is t
 
 ### Semantic layer
 
-The `Desired` associated type per adaptor is the seam between yard's core model and file-level concerns. yard's core never constructs TOML/YAML/text directly; it builds typed `Desired` values from the preset and hands them to adaptors. This decouples the core from file formats and means adding a new managed file type is purely a new adaptor implementation.
+The `Desired` associated type per adaptor is the seam between yard's core model and file-level concerns. yard's core never constructs TOML/YAML/text directly; modules emit typed `Contribution` fragments, the engine merges them into a `Desired`, and the adaptor consumes that. This decouples the core from file formats and means adding a new managed file type is purely a new adaptor implementation.
 
 ## CLI verbs
 
 For v1, two verbs share a single reconciliation engine:
 
 - **`yard init`** — bootstraps a workspace. Refuses if `yard.toml` already exists. Writes a starter `yard.toml` (smart defaults), then runs the apply engine to produce the initial managed files.
-- **`yard apply`** — the workhorse verb. Reads `yard.toml`, loads the preset, runs every adaptor's `apply`, writes results. Used for version bumps (after the user edits `preset_version`), repairs, and any subsequent reconciliation.
+- **`yard apply`** — the workhorse verb. Reads `yard.toml`, runs every module to produce contributions, merges per adaptor, runs every adaptor's `apply`, writes results. Used after binary upgrades, after `yard.toml` edits, for repairs, and for any subsequent reconciliation.
 
-Migration from one preset version to the next is **not its own verb** — it is one reason to call `apply`. The engine doesn't care.
+Migration from one yard version to the next is **not its own verb** — it is one reason to call `apply`. The engine doesn't care.
 
 ## v1 scope
 
@@ -220,7 +314,11 @@ Migration from one preset version to the next is **not its own verb** — it is 
 
 - `yard.toml`
 
-**Managed output files:**
+**yard-owned state:**
+
+- `.yard/state.toml` — last-applied yard binary version, used for cross-team version-mismatch warnings.
+
+**Managed output files (each created only if at least one module contributes):**
 
 - `pixi.toml` — env management. Per-key comment marking.
 - `.pre-commit-config.yaml` — dev-quality config. Per-key comment marking.
@@ -230,4 +328,8 @@ Migration from one preset version to the next is **not its own verb** — it is 
 
 - `yard init`, `yard apply`.
 
-Everything else (additional file types, package-level files like `package.xml`/`CMakeLists.txt`, status/dry-run verbs, remote presets, workflow shortcut verbs) is deferred until the v1 mechanic is solid.
+**Distribution:**
+
+- Standalone binary via `curl | sh` install script with `--version` pin support. Pre-built binaries published to GitHub releases.
+
+Everything else (additional file types, package-level files like `package.xml`/`CMakeLists.txt`, status/dry-run verbs, user-authored or remote modules, workflow shortcut verbs, alternate install channels) is deferred until the v1 mechanic is solid.
