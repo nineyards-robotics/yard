@@ -5,10 +5,11 @@
 //! is preserved verbatim. If the fence is rewritten as `yard:frozen`, yard
 //! leaves the entire block alone.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::RuntimeContext;
 use crate::adaptors::{ApplyOutcome, KeyAction};
 
 const FENCE_OPEN_MANAGED: &str = "# >>> yard:managed >>>";
@@ -59,11 +60,16 @@ impl GitignoreDesired {
 pub struct GitignoreAdaptor;
 
 impl GitignoreAdaptor {
-    pub fn path(&self, workspace: &Path) -> PathBuf {
-        workspace.join(".gitignore")
+    pub fn path(&self, ctx: &RuntimeContext) -> PathBuf {
+        ctx.workspace.join(".gitignore")
     }
 
-    pub fn apply(&self, desired: &GitignoreDesired, existing: Option<&str>) -> ApplyOutcome {
+    pub fn apply(
+        &self,
+        desired: &GitignoreDesired,
+        existing: Option<&str>,
+        _ctx: &RuntimeContext,
+    ) -> ApplyOutcome {
         let desired_inner = render_inner(desired);
 
         let Some(content) = existing else {
@@ -217,8 +223,8 @@ mod tests {
     };
 
     fn run(name: &str) {
-        run_apply_fixture::<GitignoreDesired, _>(&HARNESS, name, |d, e| {
-            GitignoreAdaptor.apply(d, e)
+        run_apply_fixture::<GitignoreDesired, _>(&HARNESS, name, |d, e, r| {
+            GitignoreAdaptor.apply(d, e, r)
         });
     }
 

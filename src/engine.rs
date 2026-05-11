@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use crate::adaptors::KeyAction;
 use crate::adaptors::gitignore::{GitignoreAdaptor, GitignoreContribution, GitignoreDesired};
-use crate::{Contribution, YardConfig, modules};
+use crate::adaptors::pixi::{PixiAdaptor, PixiContribution, PixiDesired};
+use crate::{Contribution, ModuleContext, RuntimeContext, YardConfig, modules};
 
 /// Per-file outcome reported back to the CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,12 +48,23 @@ pub enum EngineError {
 /// adaptor's `Desired`, apply, and write results. An adaptor with no
 /// contributions is skipped entirely — its file is not created.
 pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, EngineError> {
+    let runtime = RuntimeContext {
+        workspace,
+        yard_version: env!("CARGO_PKG_VERSION"),
+    };
+    let module_ctx = ModuleContext {
+        config,
+        runtime: &runtime,
+    };
+
     let mut gitignore_contribs: Vec<GitignoreContribution> = Vec::new();
+    let mut pixi_contribs: Vec<PixiContribution> = Vec::new();
 
     for module in modules::registry() {
-        for contribution in (module.contribute)(config) {
+        for contribution in (module.contribute)(&module_ctx) {
             match contribution {
                 Contribution::Gitignore(g) => gitignore_contribs.push(g),
+                Contribution::Pixi(p) => pixi_contribs.push(p),
             }
         }
     }
@@ -61,10 +73,26 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
 
     if !gitignore_contribs.is_empty() {
         let adaptor = GitignoreAdaptor;
-        let path = adaptor.path(workspace);
+        let path = adaptor.path(&runtime);
         let desired = GitignoreDesired::from_contributions(gitignore_contribs);
         let existing = read_if_exists(&path)?;
-        let outcome = adaptor.apply(&desired, existing.as_deref());
+        let outcome = adaptor.apply(&desired, existing.as_deref(), &runtime);
+        fs::write(&path, &outcome.contents).map_err(|source| EngineError::Write {
+            path: path.clone(),
+            source,
+        })?;
+        report.files.push(FileReport {
+            path,
+            actions: outcome.actions,
+        });
+    }
+
+    if !pixi_contribs.is_empty() {
+        let adaptor = PixiAdaptor;
+        let path = adaptor.path(&runtime);
+        let desired = PixiDesired::from_contributions(pixi_contribs);
+        let existing = read_if_exists(&path)?;
+        let outcome = adaptor.apply(&desired, existing.as_deref(), &runtime);
         fs::write(&path, &outcome.contents).map_err(|source| EngineError::Write {
             path: path.clone(),
             source,

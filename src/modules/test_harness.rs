@@ -12,7 +12,7 @@ use std::path::Path;
 use ron::ser::PrettyConfig;
 
 use crate::test_support::assert_golden;
-use crate::{Contribution, YardConfig};
+use crate::{Contribution, ModuleContext, RuntimeContext, YardConfig};
 
 pub struct ModuleHarness {
     pub fixtures_root: &'static str,
@@ -21,7 +21,7 @@ pub struct ModuleHarness {
 #[track_caller]
 pub fn run_module_fixture<F>(harness: &ModuleHarness, scenario: &str, contribute: F)
 where
-    F: FnOnce(&YardConfig) -> Vec<Contribution>,
+    F: FnOnce(&ModuleContext) -> Vec<Contribution>,
 {
     let dir = Path::new(harness.fixtures_root).join(scenario);
 
@@ -30,7 +30,16 @@ where
     let config = YardConfig::from_str(&raw)
         .unwrap_or_else(|e| panic!("parse yard.toml in {}: {e}", dir.display()));
 
-    let contribs = contribute(&config);
+    let runtime = RuntimeContext {
+        workspace: &dir,
+        yard_version: env!("CARGO_PKG_VERSION"),
+    };
+    let ctx = ModuleContext {
+        config: &config,
+        runtime: &runtime,
+    };
+
+    let contribs = contribute(&ctx);
     let mut serialized = ron::ser::to_string_pretty(
         &contribs,
         PrettyConfig::default().struct_names(true),

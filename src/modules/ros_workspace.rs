@@ -6,9 +6,9 @@
 //! unconditionally; nothing in `yard.toml` toggles it.
 
 use crate::adaptors::gitignore::GitignoreContribution;
-use crate::{Contribution, YardConfig};
+use crate::{Contribution, ModuleContext};
 
-pub fn contribute(_config: &YardConfig) -> Vec<Contribution> {
+pub fn contribute(_ctx: &ModuleContext) -> Vec<Contribution> {
     vec![Contribution::Gitignore(GitignoreContribution {
         lines: vec!["build/".into(), "install/".into(), "log/".into()],
     })]

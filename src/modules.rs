@@ -10,13 +10,13 @@ pub mod ros_workspace;
 #[cfg(test)]
 pub(crate) mod test_harness;
 
-use crate::{Contribution, YardConfig};
+use crate::{Contribution, ModuleContext};
 
 /// A module: an id (used in diagnostics) and a pure function that turns the
-/// parsed config into typed contributions.
+/// module context (parsed config + runtime info) into typed contributions.
 pub struct Module {
     pub id: &'static str,
-    pub contribute: fn(&YardConfig) -> Vec<Contribution>,
+    pub contribute: fn(&ModuleContext) -> Vec<Contribution>,
 }
 
 /// The ordered set of modules baked into the binary. Iteration order is

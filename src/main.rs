@@ -77,6 +77,7 @@ fn print_action(action: &KeyAction) {
         KeyAction::InSync { key } => println!("  in sync   {key}"),
         KeyAction::Updated { key, .. } => println!("  updated   {key}"),
         KeyAction::Reemitted { key, .. } => println!("  emitted   {key}"),
+        KeyAction::Overridden { key, .. } => println!("  override  {key}"),
         KeyAction::Frozen { key } => println!("  frozen    {key}"),
     }
 }

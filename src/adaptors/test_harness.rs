@@ -9,6 +9,7 @@ use std::path::Path;
 
 use serde::de::DeserializeOwned;
 
+use crate::RuntimeContext;
 use crate::adaptors::{ApplyOutcome, KeyAction};
 use crate::test_support::assert_golden;
 
@@ -26,7 +27,7 @@ pub struct ApplyHarness {
 pub fn run_apply_fixture<D, F>(harness: &ApplyHarness, scenario: &str, apply: F)
 where
     D: DeserializeOwned,
-    F: FnOnce(&D, Option<&str>) -> ApplyOutcome,
+    F: FnOnce(&D, Option<&str>, &RuntimeContext) -> ApplyOutcome,
 {
     let dir = Path::new(harness.fixtures_root).join(scenario);
 
@@ -40,7 +41,11 @@ where
         .exists()
         .then(|| fs::read_to_string(&existing_path).unwrap());
 
-    let outcome = apply(&desired, existing.as_deref());
+    let runtime = RuntimeContext {
+        workspace: &dir,
+        yard_version: env!("CARGO_PKG_VERSION"),
+    };
+    let outcome = apply(&desired, existing.as_deref(), &runtime);
 
     assert_golden(&dir.join(harness.expected_filename), &outcome.contents);
     assert_golden(&dir.join("expected.actions"), &format_actions(&outcome.actions));
@@ -56,6 +61,7 @@ pub fn format_actions(actions: &[KeyAction]) -> String {
             KeyAction::InSync { key } => ("InSync", key),
             KeyAction::Updated { key, .. } => ("Updated", key),
             KeyAction::Reemitted { key, .. } => ("Reemitted", key),
+            KeyAction::Overridden { key, .. } => ("Overridden", key),
             KeyAction::Frozen { key } => ("Frozen", key),
         };
         out.push_str(&format!("{kind} {key}\n"));

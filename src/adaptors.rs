@@ -6,6 +6,7 @@
 //! and produce an outcome; the engine wires them together.
 
 pub mod gitignore;
+pub mod pixi;
 
 #[cfg(test)]
 pub(crate) mod test_harness;
@@ -38,6 +39,13 @@ pub enum KeyAction {
     },
     /// Key/block was absent (or the file did not exist); yard emitted it.
     Reemitted { key: String, to: String },
+    /// Per-key marking strategy: the user's value diverges from the recorded
+    /// `default=`. yard leaves the key alone.
+    Overridden {
+        key: String,
+        user_value: String,
+        default: String,
+    },
     /// Key/block carries a `yard:frozen` marker; yard left it untouched.
     Frozen { key: String },
 }
