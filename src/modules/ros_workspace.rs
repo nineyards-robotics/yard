@@ -13,3 +13,27 @@ pub fn contribute(_config: &YardConfig) -> Vec<Contribution> {
         lines: vec!["build/".into(), "install/".into(), "log/".into()],
     })]
 }
+
+#[cfg(test)]
+mod tests {
+    //! Add a new scenario: drop a directory under `fixtures/` containing
+    //! `yard.toml`, then add a one-line `#[test]` below.
+    //! `expected.contributions.ron` is generated on first run with
+    //! `UPDATE_GOLDENS=1`.
+
+    use super::*;
+    use crate::modules::test_harness::{ModuleHarness, run_module_fixture};
+
+    const HARNESS: ModuleHarness = ModuleHarness {
+        fixtures_root: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/modules/ros_workspace/fixtures"
+        ),
+    };
+
+    fn run(name: &str) {
+        run_module_fixture(&HARNESS, name, contribute);
+    }
+
+    #[test] fn emits_standard_ignores() { run("emits_standard_ignores"); }
+}

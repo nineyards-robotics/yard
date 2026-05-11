@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::adaptors::{ApplyOutcome, KeyAction};
 
 const FENCE_OPEN_MANAGED: &str = "# >>> yard:managed >>>";
@@ -20,7 +22,7 @@ const BLOCK_KEY: &str = ".gitignore:managed";
 /// Fragment a module wants merged into the gitignore. `lines` are raw
 /// gitignore patterns (e.g. `"build/"`); order is preserved on first sight,
 /// duplicates across contributions are dropped on merge.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct GitignoreContribution {
     pub lines: Vec<String>,
 }
@@ -30,7 +32,7 @@ pub struct GitignoreContribution {
 /// Lines are deduplicated but order is otherwise preserved: the first module
 /// to mention a line decides where it appears, which gives deterministic
 /// output (modules run in registry order).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 pub struct GitignoreDesired {
     pub lines: Vec<String>,
 }
@@ -200,14 +202,33 @@ fn strip_eol(line: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    //! Add a new scenario: drop a directory under `fixtures/` containing
+    //! `desired.ron` (+ optional `existing.gitignore`), then add a one-line
+    //! `#[test]` below. `expected.gitignore` and `expected.actions` are
+    //! generated on the first run with `UPDATE_GOLDENS=1`.
 
-    fn desired(lines: &[&str]) -> GitignoreDesired {
-        GitignoreDesired {
-            lines: lines.iter().map(|s| s.to_string()).collect(),
-        }
+    use super::*;
+    use crate::adaptors::test_harness::{ApplyHarness, run_apply_fixture};
+
+    const HARNESS: ApplyHarness = ApplyHarness {
+        fixtures_root: concat!(env!("CARGO_MANIFEST_DIR"), "/src/adaptors/gitignore/fixtures"),
+        existing_filename: "existing.gitignore",
+        expected_filename: "expected.gitignore",
+    };
+
+    fn run(name: &str) {
+        run_apply_fixture::<GitignoreDesired, _>(&HARNESS, name, |d, e| {
+            GitignoreAdaptor.apply(d, e)
+        });
     }
 
+    #[test] fn create_fresh()           { run("create_fresh"); }
+    #[test] fn in_sync()                { run("in_sync"); }
+    #[test] fn update_in_place()        { run("update_in_place"); }
+    #[test] fn appends_when_no_fence()  { run("appends_when_no_fence"); }
+    #[test] fn frozen_block()           { run("frozen_block"); }
+
+    /// Pure merge logic — different shape from `apply`, so it stays inline.
     #[test]
     fn merges_and_deduplicates_lines() {
         let merged = GitignoreDesired::from_contributions([
@@ -219,94 +240,5 @@ mod tests {
             },
         ]);
         assert_eq!(merged.lines, vec!["build/", "install/", "log/"]);
-    }
-
-    #[test]
-    fn creates_file_when_missing() {
-        let outcome = GitignoreAdaptor.apply(&desired(&["build/", "install/"]), None);
-        assert_eq!(
-            outcome.contents,
-            "# >>> yard:managed >>>\nbuild/\ninstall/\n# <<< yard:managed <<<\n"
-        );
-        assert!(matches!(
-            outcome.actions.as_slice(),
-            [KeyAction::Reemitted { .. }]
-        ));
-    }
-
-    #[test]
-    fn in_sync_when_block_matches() {
-        let existing =
-            "# >>> yard:managed >>>\nbuild/\ninstall/\n# <<< yard:managed <<<\n";
-        let outcome = GitignoreAdaptor.apply(&desired(&["build/", "install/"]), Some(existing));
-        assert_eq!(outcome.contents, existing);
-        assert!(matches!(
-            outcome.actions.as_slice(),
-            [KeyAction::InSync { .. }]
-        ));
-    }
-
-    #[test]
-    fn updates_block_in_place_preserving_surroundings() {
-        let existing = "\
-# top user note
-secret.env
-
-# >>> yard:managed >>>
-build/
-# <<< yard:managed <<<
-
-# bottom user note
-local/
-";
-        let outcome =
-            GitignoreAdaptor.apply(&desired(&["build/", "install/", "log/"]), Some(existing));
-        let expected = "\
-# top user note
-secret.env
-
-# >>> yard:managed >>>
-build/
-install/
-log/
-# <<< yard:managed <<<
-
-# bottom user note
-local/
-";
-        assert_eq!(outcome.contents, expected);
-        assert!(matches!(
-            outcome.actions.as_slice(),
-            [KeyAction::Updated { .. }]
-        ));
-    }
-
-    #[test]
-    fn appends_fence_when_existing_file_has_no_fence() {
-        let existing = "secret.env\n";
-        let outcome = GitignoreAdaptor.apply(&desired(&["build/"]), Some(existing));
-        let expected = "\
-secret.env
-
-# >>> yard:managed >>>
-build/
-# <<< yard:managed <<<
-";
-        assert_eq!(outcome.contents, expected);
-    }
-
-    #[test]
-    fn frozen_block_is_left_untouched() {
-        let existing = "\
-# >>> yard:frozen >>>
-build/
-# <<< yard:frozen <<<
-";
-        let outcome = GitignoreAdaptor.apply(&desired(&["build/", "install/"]), Some(existing));
-        assert_eq!(outcome.contents, existing);
-        assert!(matches!(
-            outcome.actions.as_slice(),
-            [KeyAction::Frozen { .. }]
-        ));
     }
 }

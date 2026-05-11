@@ -14,11 +14,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub mod adaptors;
 pub mod engine;
 pub mod modules;
+
+#[cfg(test)]
+mod test_support;
 
 pub use engine::{EngineError, EngineReport, FileReport};
 
@@ -76,7 +79,7 @@ impl YardConfig {
 /// Each variant targets exactly one adaptor. Modules emit fragments; the
 /// engine groups all contributions per adaptor and merges them into the
 /// adaptor's `Desired` value. New adaptors add a new variant here.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Contribution {
     Gitignore(crate::adaptors::gitignore::GitignoreContribution),
 }

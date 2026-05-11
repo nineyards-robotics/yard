@@ -7,6 +7,9 @@
 
 pub mod gitignore;
 
+#[cfg(test)]
+pub(crate) mod test_harness;
+
 /// Outcome of a single `apply` call.
 ///
 /// `contents` is what the engine will write to disk. `actions` records what

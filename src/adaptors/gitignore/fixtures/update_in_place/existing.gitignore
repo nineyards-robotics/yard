@@ -1,0 +1,9 @@
+# top user note
+secret.env
+
+# >>> yard:managed >>>
+build/
+# <<< yard:managed <<<
+
+# bottom user note
+local/

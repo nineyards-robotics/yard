@@ -7,6 +7,9 @@
 
 pub mod ros_workspace;
 
+#[cfg(test)]
+pub(crate) mod test_harness;
+
 use crate::{Contribution, YardConfig};
 
 /// A module: an id (used in diagnostics) and a pure function that turns the

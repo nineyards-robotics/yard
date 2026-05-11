@@ -1,0 +1,3 @@
+GitignoreDesired(
+    lines: ["build/", "install/", "log/"],
+)

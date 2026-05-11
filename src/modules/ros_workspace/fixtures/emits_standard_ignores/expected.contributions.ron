@@ -1,0 +1,9 @@
+[
+    Gitignore(GitignoreContribution(
+        lines: [
+            "build/",
+            "install/",
+            "log/",
+        ],
+    )),
+]
