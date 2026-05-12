@@ -117,6 +117,42 @@ build/
 }
 
 #[test]
+fn apply_errors_on_managed_fence_without_id() {
+    // Per DESIGN.md: "A fence missing the id ... is a parse error: the file
+    // fails loud rather than letting yard silently take or lose ownership."
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    let malformed = "# >>> yard:managed >>>\nbuild/\n# <<< yard:managed <<<\n";
+    fs::write(ws.path().join(".gitignore"), malformed).unwrap();
+
+    yard_apply(ws.path())
+        .failure()
+        .stderr(contains(".gitignore"));
+
+    // File must be untouched — no half-applied state.
+    assert_eq!(read_gitignore(ws.path()), malformed);
+}
+
+#[test]
+fn apply_errors_on_mismatched_fence_ids() {
+    // Open says id=foo, close says id=bar — per DESIGN.md this is the same
+    // parse-error class as a missing id.
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    let mismatched =
+        "# >>> yard:managed id=foo >>>\nbuild/\n# <<< yard:managed id=bar <<<\n";
+    fs::write(ws.path().join(".gitignore"), mismatched).unwrap();
+
+    yard_apply(ws.path())
+        .failure()
+        .stderr(contains(".gitignore"));
+
+    assert_eq!(read_gitignore(ws.path()), mismatched);
+}
+
+#[test]
 fn apply_fails_when_yard_toml_missing() {
     let ws = TempDir::new().unwrap();
     yard_apply(ws.path())
