@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimeContext;
 use crate::adaptors::{ApplyOutcome, KeyAction};
+use crate::engine::MergeError;
 
 /// Fragment a module wants merged into the gitignore. Targets one fence —
 /// `id` names the block (`[A-Za-z0-9_-]+`); `lines` are raw gitignore
@@ -45,12 +46,21 @@ pub struct GitignoreDesired {
 }
 
 impl GitignoreDesired {
-    pub fn from_contributions<I>(contribs: I) -> Self
+    /// Merge per-module contributions into a single desired set of fences.
+    ///
+    /// Each input is paired with its contributing module id so any future
+    /// scalar-merge conflict can name both parties (see DESIGN.md: "Scalars
+    /// ... error if two modules disagree, naming both modules and the
+    /// offending key"). gitignore's merge is purely additive — lines for a
+    /// given fence id union with dedup — so this always returns `Ok`; the
+    /// `Result` is here for shape symmetry with adaptors that do have
+    /// scalars.
+    pub fn from_contributions<I>(contribs: I) -> Result<Self, MergeError>
     where
-        I: IntoIterator<Item = GitignoreContribution>,
+        I: IntoIterator<Item = (&'static str, GitignoreContribution)>,
     {
         let mut fences: Vec<DesiredFence> = Vec::new();
-        for c in contribs {
+        for (_module, c) in contribs {
             if let Some(existing) = fences.iter_mut().find(|f| f.id == c.id) {
                 for line in c.lines {
                     if !existing.lines.iter().any(|l| l == &line) {
@@ -64,7 +74,7 @@ impl GitignoreDesired {
                 });
             }
         }
-        Self { fences }
+        Ok(Self { fences })
     }
 }
 
@@ -79,16 +89,23 @@ impl GitignoreAdaptor {
         &self,
         desired: &GitignoreDesired,
         existing: Option<&str>,
-        _ctx: &RuntimeContext,
-    ) -> ApplyOutcome {
+        ctx: &RuntimeContext,
+    ) -> Result<ApplyOutcome, GitignoreParseError> {
         let mut contents = existing.unwrap_or("").to_string();
         let mut actions = Vec::new();
+        let path = self.path(ctx);
 
         for fence in &desired.fences {
             // Re-parse for each fence: a previous splice/append may have
             // shifted byte offsets. Cheap for the file sizes we deal with
             // and keeps the splice math correct without offset bookkeeping.
-            let parsed = parse_fences(&contents);
+            // Splices only touch fence interiors, so a file that parsed
+            // once parses the same way on every iteration.
+            let parsed = parse_fences(&contents).map_err(|p| GitignoreParseError {
+                path: path.clone(),
+                line: p.line,
+                kind: p.kind,
+            })?;
             let inner = render_inner(&fence.lines);
             match parsed.find(&fence.id) {
                 Some(found) if found.kind == FenceKind::Overridden => {
@@ -121,8 +138,41 @@ impl GitignoreAdaptor {
             }
         }
 
-        ApplyOutcome { contents, actions }
+        Ok(ApplyOutcome { contents, actions })
     }
+}
+
+/// Parse error surfaced when reconciling against a malformed `.gitignore`.
+///
+/// Per DESIGN.md: "A fence missing the id (or with mismatched open/close
+/// ids) is a parse error: the file fails loud rather than letting yard
+/// silently take or lose ownership." The struct carries the file path and a
+/// 1-based line number so error messages point straight at the broken
+/// marker; `kind` records which specific malformation was hit.
+#[derive(Debug, thiserror::Error)]
+#[error("{path}:{line}: {kind}", path = .path.display())]
+pub struct GitignoreParseError {
+    pub path: PathBuf,
+    pub line: usize,
+    pub kind: ParseErrorKind,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ParseErrorKind {
+    #[error("yard fence is missing the required `id=<slug>`")]
+    MissingId,
+    #[error("yard fence id {0:?} is not a valid slug (allowed: [A-Za-z0-9_-]+)")]
+    InvalidId(String),
+    #[error("unknown yard fence kind {0:?}; expected `managed` or `overridden`")]
+    UnknownKind(String),
+    #[error("malformed yard fence marker: {0:?}")]
+    MalformedMarker(String),
+    #[error("yard fence open id={open:?} does not match close id={close:?}")]
+    MismatchedIds { open: String, close: String },
+    #[error("yard fence close id={0:?} has no matching open above it")]
+    OrphanClose(String),
+    #[error("yard fence id={0:?} was opened but never closed")]
+    Unterminated(String),
 }
 
 fn render_inner(lines: &[String]) -> String {
@@ -190,52 +240,101 @@ impl ParsedFences {
     }
 }
 
-/// Walk `content` for all yard fences. Malformed markers (missing `id=`,
-/// mismatched open/close, unknown kind) are silently ignored for now; a
-/// future change should surface them through an error channel — see DESIGN.md
-/// "A fence missing the id ... is a parse error".
-fn parse_fences(content: &str) -> ParsedFences {
+/// Walk `content` for all yard fences. Any line that looks like a yard
+/// marker (matches the `# >>> yard:` / `# <<< yard:` prefix) but does not
+/// parse cleanly aborts the walk with a [`PendingParseError`] carrying the
+/// 1-based line number and the specific [`ParseErrorKind`]. The caller
+/// attaches the file path.
+fn parse_fences(content: &str) -> Result<ParsedFences, PendingParseError> {
     let mut out = ParsedFences::default();
-    let mut open: Option<(FenceKind, String, usize, usize)> = None;
+    let mut open: Option<OpenState> = None;
     let mut cursor = 0usize;
 
-    for line in content.split_inclusive('\n') {
+    for (idx, line) in content.split_inclusive('\n').enumerate() {
+        let line_num = idx + 1;
         let line_start = cursor;
         let line_end = cursor + line.len();
         cursor = line_end;
         let trimmed = strip_eol(line);
 
-        match &open {
-            None => {
-                if let Some(marker) = parse_marker(trimmed, MarkerDir::Open) {
-                    open = Some((marker.kind, marker.id, line_start, line_end));
-                }
+        if let Some(attempt) = parse_marker(trimmed, MarkerDir::Open) {
+            let marker = attempt.map_err(|kind| PendingParseError {
+                line: line_num,
+                kind,
+            })?;
+            if let Some(prev) = &open {
+                // A second open before the previous closed — the previous
+                // fence is unterminated.
+                return Err(PendingParseError {
+                    line: prev.open_line,
+                    kind: ParseErrorKind::Unterminated(prev.id.clone()),
+                });
             }
-            Some((kind, id, open_start, open_end)) => {
-                if let Some(marker) = parse_marker(trimmed, MarkerDir::Close)
-                    && marker.kind == *kind
-                    && marker.id == *id
-                {
-                    let inner_bytes = &content[*open_end..line_start];
-                    let inner = inner_bytes.strip_suffix('\n').unwrap_or(inner_bytes);
-                    out.fences.push((
-                        id.clone(),
-                        FoundFence {
-                            kind: *kind,
-                            open_start: *open_start,
-                            close_end: line_end,
-                            inner: inner.to_string(),
-                        },
-                    ));
-                    open = None;
-                }
-                // Mismatched/other close: leave `open` set and keep scanning;
-                // the next matching close (or end-of-file) terminates.
+            open = Some(OpenState {
+                kind: marker.kind,
+                id: marker.id,
+                open_start: line_start,
+                open_end: line_end,
+                open_line: line_num,
+            });
+        } else if let Some(attempt) = parse_marker(trimmed, MarkerDir::Close) {
+            let marker = attempt.map_err(|kind| PendingParseError {
+                line: line_num,
+                kind,
+            })?;
+            let Some(state) = open.take() else {
+                return Err(PendingParseError {
+                    line: line_num,
+                    kind: ParseErrorKind::OrphanClose(marker.id),
+                });
+            };
+            if marker.kind != state.kind || marker.id != state.id {
+                return Err(PendingParseError {
+                    line: line_num,
+                    kind: ParseErrorKind::MismatchedIds {
+                        open: state.id,
+                        close: marker.id,
+                    },
+                });
             }
+            let inner_bytes = &content[state.open_end..line_start];
+            let inner = inner_bytes.strip_suffix('\n').unwrap_or(inner_bytes);
+            out.fences.push((
+                state.id.clone(),
+                FoundFence {
+                    kind: state.kind,
+                    open_start: state.open_start,
+                    close_end: line_end,
+                    inner: inner.to_string(),
+                },
+            ));
         }
     }
 
-    out
+    if let Some(state) = open {
+        return Err(PendingParseError {
+            line: state.open_line,
+            kind: ParseErrorKind::Unterminated(state.id),
+        });
+    }
+
+    Ok(out)
+}
+
+struct OpenState {
+    kind: FenceKind,
+    id: String,
+    open_start: usize,
+    open_end: usize,
+    open_line: usize,
+}
+
+/// Parse-time error before a path has been attached. `parse_fences` is path-
+/// agnostic; the adaptor stamps the path on as it lifts this into a
+/// [`GitignoreParseError`].
+struct PendingParseError {
+    line: usize,
+    kind: ParseErrorKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,26 +349,43 @@ struct Marker {
     id: String,
 }
 
-fn parse_marker(line: &str, dir: MarkerDir) -> Option<Marker> {
+/// Three-way recognition:
+/// - `None`            — line is not a yard marker line at all (prefix mismatch).
+/// - `Some(Ok(_))`     — well-formed yard marker.
+/// - `Some(Err(_))`    — line started with the yard prefix but failed to parse.
+///
+/// Once the prefix matches, the line is committed to yard: any malformation
+/// becomes a parse error rather than being silently treated as user content.
+fn parse_marker(line: &str, dir: MarkerDir) -> Option<Result<Marker, ParseErrorKind>> {
     let (prefix, suffix) = match dir {
         MarkerDir::Open => ("# >>> yard:", " >>>"),
         MarkerDir::Close => ("# <<< yard:", " <<<"),
     };
-    let body = line.strip_prefix(prefix)?.strip_suffix(suffix)?;
-    let (kind_str, rest) = body.split_once(' ')?;
+    let rest = line.strip_prefix(prefix)?;
+    let body = match rest.strip_suffix(suffix) {
+        Some(b) => b,
+        None => return Some(Err(ParseErrorKind::MalformedMarker(line.to_string()))),
+    };
+    let (kind_str, rest) = match body.split_once(' ') {
+        Some(parts) => parts,
+        None => return Some(Err(ParseErrorKind::MissingId)),
+    };
     let kind = match kind_str {
         "managed" => FenceKind::Managed,
         "overridden" => FenceKind::Overridden,
-        _ => return None,
+        other => return Some(Err(ParseErrorKind::UnknownKind(other.to_string()))),
     };
-    let id = rest.strip_prefix("id=")?;
+    let id = match rest.strip_prefix("id=") {
+        Some(id) => id,
+        None => return Some(Err(ParseErrorKind::MissingId)),
+    };
     if !is_valid_slug(id) {
-        return None;
+        return Some(Err(ParseErrorKind::InvalidId(id.to_string())));
     }
-    Some(Marker {
+    Some(Ok(Marker {
         kind,
         id: id.to_string(),
-    })
+    }))
 }
 
 fn is_valid_slug(s: &str) -> bool {
@@ -301,7 +417,11 @@ mod tests {
 
     fn run(name: &str) {
         run_apply_fixture::<GitignoreDesired, _>(&HARNESS, name, |d, e, r| {
-            GitignoreAdaptor.apply(d, e, r)
+            // Fixture inputs are all well-formed; a parse error here is a
+            // bug in the fixture, not behaviour under test.
+            GitignoreAdaptor
+                .apply(d, e, r)
+                .expect("fixture inputs should parse cleanly")
         });
     }
 
@@ -317,15 +437,22 @@ mod tests {
     #[test]
     fn merges_and_deduplicates_lines() {
         let merged = GitignoreDesired::from_contributions([
-            GitignoreContribution {
-                id: "standard-ignores".into(),
-                lines: vec!["build/".into(), "install/".into()],
-            },
-            GitignoreContribution {
-                id: "standard-ignores".into(),
-                lines: vec!["install/".into(), "log/".into()],
-            },
-        ]);
+            (
+                "mod_a",
+                GitignoreContribution {
+                    id: "standard-ignores".into(),
+                    lines: vec!["build/".into(), "install/".into()],
+                },
+            ),
+            (
+                "mod_b",
+                GitignoreContribution {
+                    id: "standard-ignores".into(),
+                    lines: vec!["install/".into(), "log/".into()],
+                },
+            ),
+        ])
+        .expect("gitignore merge is additive and cannot fail today");
         assert_eq!(merged.fences.len(), 1);
         assert_eq!(merged.fences[0].id, "standard-ignores");
         assert_eq!(merged.fences[0].lines, vec!["build/", "install/", "log/"]);
@@ -334,19 +461,29 @@ mod tests {
     #[test]
     fn groups_contributions_by_id() {
         let merged = GitignoreDesired::from_contributions([
-            GitignoreContribution {
-                id: "a".into(),
-                lines: vec!["x".into()],
-            },
-            GitignoreContribution {
-                id: "b".into(),
-                lines: vec!["y".into()],
-            },
-            GitignoreContribution {
-                id: "a".into(),
-                lines: vec!["z".into()],
-            },
-        ]);
+            (
+                "mod_a",
+                GitignoreContribution {
+                    id: "a".into(),
+                    lines: vec!["x".into()],
+                },
+            ),
+            (
+                "mod_b",
+                GitignoreContribution {
+                    id: "b".into(),
+                    lines: vec!["y".into()],
+                },
+            ),
+            (
+                "mod_a",
+                GitignoreContribution {
+                    id: "a".into(),
+                    lines: vec!["z".into()],
+                },
+            ),
+        ])
+        .expect("gitignore merge is additive and cannot fail today");
         assert_eq!(merged.fences.len(), 2);
         assert_eq!(merged.fences[0].id, "a");
         assert_eq!(merged.fences[0].lines, vec!["x", "z"]);
