@@ -61,8 +61,7 @@ pub fn format_actions(actions: &[KeyAction]) -> String {
             KeyAction::InSync { key } => ("InSync", key),
             KeyAction::Updated { key, .. } => ("Updated", key),
             KeyAction::Reemitted { key, .. } => ("Reemitted", key),
-            KeyAction::Overridden { key, .. } => ("Overridden", key),
-            KeyAction::Frozen { key } => ("Frozen", key),
+            KeyAction::Overridden { key } => ("Overridden", key),
         };
         out.push_str(&format!("{kind} {key}\n"));
     }

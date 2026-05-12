@@ -39,13 +39,8 @@ pub enum KeyAction {
     },
     /// Key/block was absent (or the file did not exist); yard emitted it.
     Reemitted { key: String, to: String },
-    /// Per-key marking strategy: the user's value diverges from the recorded
-    /// `default=`. yard leaves the key alone.
-    Overridden {
-        key: String,
-        user_value: String,
-        default: String,
-    },
-    /// Key/block carries a `yard:frozen` marker; yard left it untouched.
-    Frozen { key: String },
+    /// Key/block carries a `yard:overridden` marker: the user explicitly took
+    /// ownership and yard never touches it. Carries no `default=` payload —
+    /// see DESIGN.md ("the marker carries no default= payload").
+    Overridden { key: String },
 }

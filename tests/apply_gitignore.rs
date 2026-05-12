@@ -38,7 +38,11 @@ fn creates_gitignore_with_managed_block() {
     let contents = read_gitignore(ws.path());
     assert_eq!(
         contents,
-        "# >>> yard:managed >>>\nbuild/\ninstall/\nlog/\n# <<< yard:managed <<<\n"
+        "# >>> yard:managed id=standard-ignores >>>\n\
+         build/\n\
+         install/\n\
+         log/\n\
+         # <<< yard:managed id=standard-ignores <<<\n"
     );
 }
 
@@ -80,11 +84,11 @@ fn preserves_user_lines_outside_fence() {
 secret.env
 .idea/
 
-# >>> yard:managed >>>
+# >>> yard:managed id=standard-ignores >>>
 build/
 install/
 log/
-# <<< yard:managed <<<
+# <<< yard:managed id=standard-ignores <<<
 "
     );
 
@@ -94,22 +98,22 @@ log/
 }
 
 #[test]
-fn frozen_block_is_not_rewritten() {
+fn overridden_block_is_not_rewritten() {
     let ws = TempDir::new().unwrap();
     write_yard_toml(ws.path());
 
-    let frozen = "\
-# >>> yard:frozen >>>
+    let overridden = "\
+# >>> yard:overridden id=standard-ignores >>>
 build/
-# <<< yard:frozen <<<
+# <<< yard:overridden id=standard-ignores <<<
 ";
-    fs::write(ws.path().join(".gitignore"), frozen).unwrap();
+    fs::write(ws.path().join(".gitignore"), overridden).unwrap();
 
     yard_apply(ws.path())
         .success()
-        .stdout(contains("frozen"));
+        .stdout(contains("overridden"));
 
-    assert_eq!(read_gitignore(ws.path()), frozen);
+    assert_eq!(read_gitignore(ws.path()), overridden);
 }
 
 #[test]

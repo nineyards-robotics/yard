@@ -4,5 +4,9 @@ GitignoreDesired(
             id: "standard-ignores",
             lines: ["build/", "install/", "log/"],
         ),
+        DesiredFence(
+            id: "editor-ignores",
+            lines: [".vscode/", ".idea/"],
+        ),
     ],
 )

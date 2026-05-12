@@ -74,10 +74,9 @@ fn print_report(workspace: &PathBuf, files: &[FileReport]) {
 
 fn print_action(action: &KeyAction) {
     match action {
-        KeyAction::InSync { key } => println!("  in sync   {key}"),
-        KeyAction::Updated { key, .. } => println!("  updated   {key}"),
-        KeyAction::Reemitted { key, .. } => println!("  emitted   {key}"),
-        KeyAction::Overridden { key, .. } => println!("  override  {key}"),
-        KeyAction::Frozen { key } => println!("  frozen    {key}"),
+        KeyAction::InSync { key } => println!("  in sync     {key}"),
+        KeyAction::Updated { key, .. } => println!("  updated     {key}"),
+        KeyAction::Reemitted { key, .. } => println!("  emitted     {key}"),
+        KeyAction::Overridden { key } => println!("  overridden  {key}"),
     }
 }

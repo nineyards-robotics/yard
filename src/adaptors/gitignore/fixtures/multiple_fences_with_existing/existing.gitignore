@@ -1,11 +1,6 @@
-# top user note
+# user prefs
 secret.env
 
 # >>> yard:managed id=standard-ignores >>>
 build/
-install/
-log/
 # <<< yard:managed id=standard-ignores <<<
-
-# bottom user note
-local/

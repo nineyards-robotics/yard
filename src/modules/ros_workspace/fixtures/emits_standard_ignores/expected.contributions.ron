@@ -1,5 +1,6 @@
 [
     Gitignore(GitignoreContribution(
+        id: "standard-ignores",
         lines: [
             "build/",
             "install/",

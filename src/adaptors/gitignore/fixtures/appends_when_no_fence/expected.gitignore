@@ -1,5 +1,5 @@
 secret.env
 
-# >>> yard:managed >>>
+# >>> yard:managed id=standard-ignores >>>
 build/
-# <<< yard:managed <<<
+# <<< yard:managed id=standard-ignores <<<

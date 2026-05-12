@@ -45,8 +45,12 @@ pub enum EngineError {
 }
 
 /// Run every module, group contributions per adaptor, merge into each
-/// adaptor's `Desired`, apply, and write results. An adaptor with no
-/// contributions is skipped entirely — its file is not created.
+/// adaptor's `Desired`, then plan every adaptor's `apply` before committing
+/// any writes. The plan-then-commit split is what makes apply atomic — see
+/// DESIGN.md ("Apply is atomic ... if any are `Conflict`, the engine
+/// surfaces all conflicts ... and writes nothing"). An adaptor with no
+/// contributions is currently skipped entirely; once removal lands the
+/// adaptor will instead run with an empty `Desired`.
 pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, EngineError> {
     let runtime = RuntimeContext {
         workspace,
@@ -69,7 +73,7 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
         }
     }
 
-    let mut report = EngineReport::default();
+    let mut planned: Vec<PlannedFile> = Vec::new();
 
     if !gitignore_contribs.is_empty() {
         let adaptor = GitignoreAdaptor;
@@ -77,14 +81,7 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
         let desired = GitignoreDesired::from_contributions(gitignore_contribs);
         let existing = read_if_exists(&path)?;
         let outcome = adaptor.apply(&desired, existing.as_deref(), &runtime);
-        fs::write(&path, &outcome.contents).map_err(|source| EngineError::Write {
-            path: path.clone(),
-            source,
-        })?;
-        report.files.push(FileReport {
-            path,
-            actions: outcome.actions,
-        });
+        planned.push(PlannedFile { path, outcome });
     }
 
     if !pixi_contribs.is_empty() {
@@ -93,17 +90,27 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
         let desired = PixiDesired::from_contributions(pixi_contribs);
         let existing = read_if_exists(&path)?;
         let outcome = adaptor.apply(&desired, existing.as_deref(), &runtime);
-        fs::write(&path, &outcome.contents).map_err(|source| EngineError::Write {
-            path: path.clone(),
+        planned.push(PlannedFile { path, outcome });
+    }
+
+    let mut report = EngineReport::default();
+    for file in planned {
+        fs::write(&file.path, &file.outcome.contents).map_err(|source| EngineError::Write {
+            path: file.path.clone(),
             source,
         })?;
         report.files.push(FileReport {
-            path,
-            actions: outcome.actions,
+            path: file.path,
+            actions: file.outcome.actions,
         });
     }
 
     Ok(report)
+}
+
+struct PlannedFile {
+    path: PathBuf,
+    outcome: crate::adaptors::ApplyOutcome,
 }
 
 fn read_if_exists(path: &Path) -> Result<Option<String>, EngineError> {

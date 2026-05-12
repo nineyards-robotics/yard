@@ -1,3 +1,8 @@
 GitignoreDesired(
-    lines: ["build/", "install/"],
+    fences: [
+        DesiredFence(
+            id: "standard-ignores",
+            lines: ["build/", "install/"],
+        ),
+    ],
 )

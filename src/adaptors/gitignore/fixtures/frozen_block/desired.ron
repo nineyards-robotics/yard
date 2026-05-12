@@ -1,3 +1,0 @@
-GitignoreDesired(
-    lines: ["build/", "install/"],
-)

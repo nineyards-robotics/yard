@@ -1,4 +1,4 @@
-# top user note
+# user prefs
 secret.env
 
 # >>> yard:managed id=standard-ignores >>>
@@ -7,5 +7,7 @@ install/
 log/
 # <<< yard:managed id=standard-ignores <<<
 
-# bottom user note
-local/
+# >>> yard:managed id=editor-ignores >>>
+.vscode/
+.idea/
+# <<< yard:managed id=editor-ignores <<<

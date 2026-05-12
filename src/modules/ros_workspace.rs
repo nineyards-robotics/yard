@@ -10,6 +10,7 @@ use crate::{Contribution, ModuleContext};
 
 pub fn contribute(_ctx: &ModuleContext) -> Vec<Contribution> {
     vec![Contribution::Gitignore(GitignoreContribution {
+        id: "standard-ignores".into(),
         lines: vec!["build/".into(), "install/".into(), "log/".into()],
     })]
 }
