@@ -31,6 +31,16 @@ mod test_support;
 
 pub use engine::{EngineError, EngineReport, FileOutcome, FileReport};
 
+/// Supported ROS 2 distributions yard can target.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RosDistro {
+    Humble,
+    Jazzy,
+    Kilted,
+    Rolling,
+}
+
 /// Parsed contents of `yard.toml`.
 ///
 /// New top-level keys must always default when absent (see DESIGN.md:
@@ -40,8 +50,8 @@ pub use engine::{EngineError, EngineReport, FileOutcome, FileReport};
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct YardConfig {
-    /// ROS 2 distribution to target (e.g. `"jazzy"`). Required, no default.
-    pub ros_distro: String,
+    /// ROS 2 distribution to target. Required, no default.
+    pub ros_distro: RosDistro,
 }
 
 /// Errors that can occur while loading `yard.toml`.

@@ -460,7 +460,7 @@ mod tests {
         fs::write(&delete_path, "original").unwrap();
 
         let config = YardConfig {
-            ros_distro: "jazzy".to_owned(),
+            ros_distro: crate::RosDistro::Jazzy,
         };
         let adaptors: [&dyn Adaptor; 4] = [
             &WRITE_ADAPTOR,
