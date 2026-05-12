@@ -22,8 +22,6 @@ curl -fsSL https://yard.sh/install | sh -s -- --version 0.5.2     # pinned to a 
 YARD_VERSION=0.5.2 curl -fsSL https://yard.sh/install | sh        # via env var
 ```
 
-Additional channels (`cargo install yard`, homebrew, scoop, AUR, ...) come later as the project matures.
-
 ### The `.yard/` folder
 
 Every yard workspace has a `.yard/` folder for yard's own state. v1 contents:
@@ -46,7 +44,7 @@ The folder is committed to git so teams stay synchronized. It leaves room for no
 On every `yard apply`:
 
 1. yard reads `.yard/state.toml` and compares `last_applied_version` to the running binary's version.
-2. If they differ, yard warns: *"yard 0.6.0 is running, but `.yard/state.toml` says last apply was 0.5.2 — output may differ from your teammate's. To match, install 0.5.2 with: `curl -fsSL https://yard.sh/install | sh -s -- --version 0.5.2`."*
+2. If they differ, yard warns: *"yard 0.6.0 is running, but `.yard/state.toml` says last apply was 0.5.2 - output may differ. To match, install 0.5.2 with: `curl -fsSL https://yard.sh/install | sh -s -- --version 0.5.2`."*
 3. The apply proceeds anyway with the running binary's logic.
 4. On success, yard writes its own version into `.yard/state.toml`.
 
@@ -70,9 +68,9 @@ Adaptors                       ← per config-type
 Managed output files           ← pixi.toml, .gitignore, .pre-commit-config.yaml, ...
 ```
 
-All of yard's logic and opinions ship in the binary. There is no separate "preset" abstraction — cross-team consistency is achieved by everyone running the same yard binary version, with the version-mismatch warning above flagging drift.
+All of yard's logic and opinions ship in the binary. Cross-team consistency is achieved by everyone running the same yard binary version, with the version-mismatch warning above flagging drift.
 
-Inside the binary, opinions are organized into **modules**. Modules read the parsed `yard.toml` and emit typed contributions; the engine groups contributions per target adaptor, merges them, and hands each adaptor a typed `Desired`. The module abstraction is invisible to the user — they see only top-level configuration sections in `yard.toml`, never a `[modules.*]` block. See the Modules section below.
+Inside the binary, opinions are organized into **modules**. Modules read the parsed `yard.toml` and emit typed contributions; the engine groups contributions per target adaptor, merges them, and hands each adaptor a typed `Desired`. The module abstraction is invisible to the user — they see only user facing configuration sections in `yard.toml`. See the Modules section below.
 
 Adaptors are independent of modules: each adaptor is keyed on the config type of the file it manages, accepts a typed `Desired`, and reconciles it against the existing file. Adding a new managed file type is purely a new adaptor implementation; adding a new opinion is purely a new module.
 
@@ -92,11 +90,6 @@ ros_distro = "jazzy"
 
 `yard.toml` deserializes into a single `YardConfig` struct, with `#[serde(deny_unknown_fields)]` at every level — an unrecognised top-level key is an error, ideally with a "did you mean X?" hint. This is the only typo-detection mechanism: there is no fuzzy matching at runtime.
 
-The schema is the union of:
-
-- **Yard-core values** — shared inputs read by multiple modules. v1 has `ros_distro` (required, no default).
-- **Module-config blocks** — one top-level key per module that takes user options. Each is either a bool (`pre_commit = true` to enable with defaults, `pre_commit = false` to disable) or a table (`[pre_commit]` with named options) via a custom deserialize wrapper so both forms are ergonomic.
-
 Concrete v1 fields are listed in the v1 scope section. New fields **always** default when absent — yard never auto-rewrites `yard.toml` to add fields the user didn't ask for. If the user wants non-default behaviour on a new field, they add it from documentation.
 
 ### When yard writes `yard.toml`
@@ -110,12 +103,17 @@ The reconciliation engine never touches `yard.toml`.
 
 ## Modules
 
-Yard's opinions are organized internally into **modules**. A module is essentially a pure function from the parsed config to a list of typed contributions:
+Yard's opinions are organized internally into **modules**. A module is essentially a pure function from a `ModuleContext` (the parsed config plus runtime info about this invocation) to a list of typed contributions:
 
 ```rust
 struct Module {
-    id: &'static str,                                 // diagnostics only
-    contribute: fn(&YardConfig) -> Vec<Contribution>,
+    id: &'static str,                                      // diagnostics only
+    contribute: fn(&ModuleContext) -> Vec<Contribution>,
+}
+
+struct ModuleContext<'a> {
+    config: &'a YardConfig,
+    runtime: &'a RuntimeContext<'a>,
 }
 ```
 
@@ -147,7 +145,7 @@ For each adaptor, the engine collects every contribution targeting it and merges
 - **Maps and lists** (deps, env vars, ignore lines, hook IDs) union.
 - **Scalars** (Python version, single-valued settings) error if two modules disagree, naming both modules and the offending key. Conflicts are loud, not silent.
 
-If an adaptor receives no contributions, it is not run and its output file is not created. This is what makes the set of managed files dynamic: which files yard touches depends entirely on which modules emit what.
+Every adaptor runs on every apply, regardless of contribution count. With contributions, the adaptor reconciles them; with none, it runs against an empty `Desired` — which is what drives *removal* (see *Update lifecycle* below) of keys and blocks yard previously wrote but no longer wants. If both the merged `Desired` and the existing file are empty (no contributions and no on-disk file), the adaptor returns empty contents and the engine writes nothing — so the set of managed files is still dynamic, but removal is now symmetric with creation.
 
 ### Ordering
 
@@ -181,9 +179,12 @@ trait ConfigAdaptor {
     /// Where this file lives in the workspace.
     fn path(&self, workspace: &Path) -> PathBuf;
 
-    /// Produce new file contents and a per-key action report.
+    /// Produce planned file contents and a per-key action report.
     /// `existing` is None on first creation; Some(content) on every later run.
     /// User-authored content outside yard-managed regions is preserved verbatim.
+    /// The engine inspects `actions` *before* writing: if any action is
+    /// `Conflict`, the entire apply is blocked across all adaptors and
+    /// nothing is written.
     fn apply(&self, desired: &Self::Desired, existing: Option<&str>) -> ApplyOutcome;
 }
 
@@ -195,14 +196,17 @@ struct ApplyOutcome {
 enum KeyAction {
     InSync     { key: String },
     Updated    { key: String, from: Value, to: Value },
-    Overridden { key: String, user_value: Value, default: Value },
-    Frozen     { key: String },
     Reemitted  { key: String, to: Value },
-    Omitted    { key: String },
+    Overridden { key: String },                                 // user explicitly took ownership via `# yard:overridden`; yard never touches
+    Omitted    { key: String },                                 // user wrote `# yard:omit <key>`; yard does not re-emit
+    Conflict   { key: String, on_disk: Value, default: Value }, // marker says managed, value differs from `default=` — apply blocks until resolved
+    Deleted    { key: String, was: Value },                     // yard owned it, no longer wants it; key removed
 }
 ```
 
-There is no separate `update` operation. `apply(desired, None)` covers creation; `apply(desired, Some(content))` covers every later run. The adaptor owns all merge logic — yard's core never touches the file's syntax tree. The action report drives what `yard apply` prints to the user (overridden keys, updated keys, etc.).
+There is no separate `update` operation. `apply(desired, None)` covers creation; `apply(desired, Some(content))` covers every later run. The adaptor owns all merge logic — yard's core never touches the file's syntax tree.
+
+**Apply is atomic.** Every adaptor runs in a planning-only mode and returns its planned `contents` plus `actions`. The engine collects every action across every adaptor and inspects them as one batch. If any are `Conflict`, the engine surfaces all conflicts to the user, exits non-zero, and writes nothing — no half-applied state. Only if the batch is conflict-free does the engine commit each adaptor's planned contents to disk. The action report otherwise drives what `yard apply` prints (updated keys, deleted keys, etc.).
 
 ### Marking strategies
 
@@ -219,81 +223,139 @@ The trailing comment carries:
 - `yard:managed` — declares ownership.
 - `default="..."` — records the value yard last wrote. Self-documents what yard would set the key to if it were in control.
 
-**Hard invariant: yard always writes the value and the comment together. The user only writes the value.** This is what makes override detection robust.
+**Hard invariant: yard always writes the value and the comment together. The user only writes the value.** This is what makes conflict detection robust. If the user wants to take a key over permanently they rewrite the marker as `# yard:overridden` (see below); if they want yard to leave the key alone for this apply they revert the value to what `default=` records.
 
-For block-shaped managed content within a structured file (entire tables, lists), the same idea applies via a leading comment on the section:
+Marking only ever attaches to a single key. yard does not claim ownership of entire tables, sections, or arrays-of-tables in a structured file — those are user territory. If a module needs a collection of values managed (e.g. a map of conda dependencies), each entry is its own per-key managed line.
+
+**Array-valued keys** are a refinement of the same scheme: per-key marking applied at the element level, so users can append items without forfeiting yard's management of the rest. When a managed key holds an array (e.g. `channels`, `platforms`), `default=` records the array yard last wrote — serialized — and yard's territory is the *set of elements* in that array rather than the whole value:
 
 ```toml
-# yard:managed
-[tool.yard.bootstrap]
-... contents owned by yard ...
+channels = ["conda-forge", "robostack-jazzy", "my-channel"]  # yard:managed default=["conda-forge","robostack-jazzy"]
 ```
+
+On apply, the adaptor diffs the on-disk array against the recorded default:
+
+- elements present in both → yard's, re-asserted in place.
+- elements on disk but not in `default=` → user-added, preserved.
+- elements in `default=` but missing from disk → user removed one of yard's items → `Conflict` (same as a divergent scalar). To genuinely drop one of yard's items, the user rewrites the whole key's marker to `# yard:overridden` (or uses `yard:omit`).
+
+The rewritten array is `desired ∪ user-additions`; the new `default=` records just `desired`. Order is canonical: desired items first in module-registry order, user-added items after in the order they appeared on disk.
+
+This is the only place `default=` records a set rather than a single value. The mental model is unchanged — yard's territory is re-asserted, the user's is preserved — only the unit of ownership is finer. Per-element opt-outs are deliberately not supported; to override a single element of a yard array, mark the whole key as overridden.
 
 **Block fencing** — for unstructured / order-dependent text files (`.gitignore`, `.gitattributes`, `.envrc`):
 
 ```
-# >>> yard:managed >>>
+# >>> yard:managed id=standard-ignores >>>
 build/
 install/
 log/
-# <<< yard:managed <<<
+# <<< yard:managed id=standard-ignores <<<
 ```
 
-yard owns everything inside the fence and rewrites the block on every apply. The user owns everything outside the fence — additional ignore rules above or below the block survive untouched. Per-line override detection inside the block is not supported (the block is all-or-nothing); to override, the user converts the fence to `yard:frozen`.
+Every fence carries an `id=<slug>` — a user-readable name, unique within the file, that names what the block contains. Ids are unquoted and restricted to `[A-Za-z0-9_-]+` (no dots: fences are flat, dots are reserved for the dotted-key-path form `yard:omit` uses in structured files). The id is required on both the open and close markers and must match. A fence missing the id (or with mismatched open/close ids) is a parse error: the file fails loud rather than letting yard silently take or lose ownership. The id is what `yard:omit` and `yard:overridden` target when the user wants to opt out of one specific block in a file that may carry several.
 
-### Override detection
+yard owns everything inside the fence and rewrites the block on every apply. The user owns everything outside the fence — additional ignore rules above or below the block survive untouched. Per-line override inside the block is not supported (the block is all-or-nothing); to take over, the user converts the fence to `yard:overridden` (preserving the id).
 
-For per-key marking, the adaptor compares the actual value against the `default=` recorded in the comment:
+### Classification
 
-| Actual vs. comment-default        | Meaning                          | yard's action on next `apply`                                       |
-|-----------------------------------|----------------------------------|---------------------------------------------------------------------|
-| equal                             | in sync                          | rewrite value + comment if the preset's desired default has changed |
-| diverged                          | user override                    | leave the key alone; report as `Overridden`                         |
-| key absent, but adaptor wants it  | section deleted or never created | re-emit unless a `yard:omit` marker is present                      |
+For per-key marking, the adaptor compares the actual value against the `default=` recorded in the comment and assigns each key a state:
 
-The collision case — *the preset's new default happens to equal the user's override* — resolves cleanly. yard sees `actual = V, comment-default = old`, classifies as diverged (because the comment hasn't been updated to V), and leaves the key alone. The comment-default is now stale, but that doesn't break anything: yard never compares comment-default against the desired value, only against the actual value to detect divergence. If the user later wants yard to retake ownership, they delete their override and the next `apply` re-emits with the current default.
+| Marker / value on disk                            | State          | yard's plan for this `apply`                                                 |
+|---------------------------------------------------|----------------|------------------------------------------------------------------------------|
+| `yard:managed`, actual == `default=`              | in sync        | rewrite value + comment if the new desired differs; otherwise no-op          |
+| `yard:managed`, actual != `default=`              | **conflict**   | report `Conflict`; the whole apply blocks until the user resolves            |
+| `yard:overridden` (any value)                     | user-owned     | leave untouched; report `Overridden`                                         |
+| `yard:omit <key>` present                         | omitted        | do not re-emit even if desired wants it; report `Omitted`                    |
+| key absent, no `yard:omit`, adaptor wants it      | missing        | re-emit fresh; report `Reemitted`                                            |
+| key present, marker missing, adaptor wants it     | unmarked       | attach `# yard:managed default=<desired>` — defer classification to the next apply |
 
-For block fencing the comparison is simpler: yard hashes the block's expected content; if the on-disk block matches a previously-emitted hash, it's safe to rewrite, otherwise it's an override.
+The **conflict** row is the central rule. Yard never silently tolerates a `yard:managed` key whose value has drifted: the moment that happens, the next apply surfaces it. The user resolves it in one of two ways:
 
-### `yard:frozen` and `yard:omit`
+- **Revert** the value to what `default=` records. The key goes back to in-sync; yard rewrites to the current desired (which may differ from the recorded default) on the same or next apply.
+- **Take it over** by rewriting the marker as `# yard:overridden`. Yard never touches it again unless the user rewinds the marker.
 
-Two opt-outs let the user take stronger control:
+There is no third path. This is by design: keeping divergence as a hard signal is what lets the rest of the system stay simple — no soft-override state, no stale `default=` comments accumulating across versions, no quiet drift between the file and what yard would write.
+
+The unmarked row is the symmetric case to the absent-key row. If the user strips just the `# yard:managed` comment but keeps the key, yard re-attaches the marker with `default=<desired>` and stops there for this apply — no same-run re-classification, no immediate flip to `Conflict`. Whatever divergence exists between the value and the freshly-recorded default surfaces on the next apply (or via a future `yard doctor` command that classifies without writing). Splitting it across two applies keeps each step doing one thing rather than racing to re-classify the moment the marker is attached.
+
+This is also how `yard adopt` (a future command) works, essentially for free: taking control of an existing config system is the same operation — walk the file, find keys yard wants to manage, attach `# yard:managed default=<desired>`. Pre-existing values then surface as in-sync or `Conflict` on the next apply, where the user resolves per-key by reverting or overriding. The unmarked row and adopt are two entry points into the same code path.
+
+Array-valued keys follow the same table at element granularity: yard's elements (those listed in `default=`) are classified individually. User-added elements (in actual but not `default=`) are silently preserved. Removal of any yard element (in `default=` but not actual) is a `Conflict` on the whole key.
+
+For block fencing the comparison is coarser: yard rewrites the entire fence's interior on every apply. There is no per-line conflict — to take over, the user converts the fence to `yard:overridden`.
+
+### `yard:overridden` and `yard:omit`
+
+Two opt-outs let the user take explicit control.
+
+**`yard:overridden`** is how the user takes a key over: yard never touches it again. The user converts a managed marker to overridden by rewriting the word `managed` as `overridden`. The marker carries **no `default=` payload**: yard has agreed never to write this key, so the historical default would only be dead weight and would rot as the binary upgrades. If the user later rewinds the marker back to `# yard:managed`, yard re-records `default=` from its current desired on the next apply.
 
 ```toml
-python = "3.12"  # yard:frozen default="3.11"
+python = "3.12"  # yard:overridden
 ```
 
-`yard:frozen` tells yard never to touch this key, regardless of divergence. Useful for permanent overrides.
+This is also the canonical way to resolve a `Conflict`: yard surfaces "your value diverges from `default=`", and the user replies either by reverting the value (yard re-takes ownership) or by rewriting the marker as `yard:overridden` (user takes ownership).
 
-```toml
-# yard:omit
-# [tool.something]   ← managed section the user removed on purpose
-```
-
-`yard:omit` tells yard not to re-emit a managed key or section it would otherwise auto-create.
-
-For block-fenced files the same markers apply at the fence:
+For block-fenced files, the user takes a fence over by changing both markers, preserving the id:
 
 ```
-# yard:frozen >>>
+# >>> yard:overridden id=standard-ignores >>>
 ... yard won't rewrite this block ...
-# yard:frozen <<<
+# <<< yard:overridden id=standard-ignores <<<
 ```
+
+**`yard:omit`** tells yard not to re-emit a managed key (or block) it would otherwise auto-create. The marker is a standalone comment line whose argument is matched against whatever target shape the file admits:
+
+- In structured files (TOML, YAML, JSONC) the argument is a full dotted key path (e.g. `project.python`).
+- In block-fenced files the argument is a fence id (e.g. `standard-ignores`).
+
+A single charset covers both: `[A-Za-z0-9_.-]+`. The arg is looked up against the set of managed targets the adaptor knows about for this file (key paths or fence ids). If no target matches — typo, stale omit for a target yard no longer emits, dot in a gitignore omit — the adaptor warns and otherwise ignores the line. Unknown omits never block an apply.
+
+```toml
+# yard:omit project.python
+```
+
+```
+# yard:omit standard-ignores
+```
+
+The marker may live anywhere in the file. v1 only supports the full-path form; a relative-to-section form (relying on toml_edit's comment-attachment) is feasible but deferred — full paths are unambiguous and easy to implement, and we can layer in relative paths as syntactic sugar later without breaking existing files.
 
 ### Update lifecycle
 
-When the user bumps `preset_version` and runs `yard apply`, the engine for each managed file:
+When the user installs a new yard version or updates `yard.toml` and runs `yard apply`, the engine:
 
-1. Loads the new `Desired` from the new preset.
-2. Calls `adaptor.apply(desired, existing)`.
-3. The adaptor walks the existing file and classifies every managed key/block.
-4. In-sync keys are rewritten with the new value *and* a new `default=` comment.
-5. Overridden keys are left alone and reported as `Overridden`.
-6. Frozen keys are never touched.
-7. Missing keys are re-emitted unless `yard:omit` is present.
-8. User-authored content (sections, keys, comments without a `yard:` prefix) is preserved verbatim.
+1. Runs every module against the parsed `yard.toml` to produce `Contribution` fragments, then merges them per adaptor into a typed `Desired` (per the *Modules → Merge* rules).
+2. Calls `adaptor.apply(desired, existing)` on every adaptor — *planning only*, nothing is written yet.
+3. Each adaptor walks the existing file and classifies every managed key, array element, and fence per the table in *Classification*.
+4. The engine collects all `KeyAction`s across all adaptors. If any are `Conflict`, the engine surfaces them, exits non-zero, and writes nothing — no file is modified this run.
+5. If the batch is conflict-free, the engine commits each adaptor's planned contents. Per-key, the action depends on classification:
+   - in-sync keys whose desired value equals the recorded `default=` are left as-is (`InSync`);
+   - in-sync keys whose desired value has changed are rewritten with the new value *and* a refreshed `default=` (`Updated`);
+   - keys absent from disk that the adaptor still wants are written fresh with `# yard:managed default=<desired>` attached (`Reemitted`);
+   - keys present on disk without a marker that the adaptor wants get `# yard:managed default=<desired>` attached — classification stops there for this apply, and any value divergence surfaces on the next one;
+   - `yard:overridden` keys are left untouched (`Overridden`);
+   - `yard:omit` keys are skipped (`Omitted`);
+   - keys yard no longer wants are deleted (`Deleted`), per *Removal* below.
 
-Re-running `yard apply` against the same `preset_version` is also valid and is the natural way to repair a workspace where managed content has been accidentally deleted.
+   Array-valued keys are reconciled at element granularity: yard's elements (listed in `default=`) are re-asserted, user-added elements preserved, and the rewrite is `desired ∪ user-additions` with `default=` recording just `desired`. Block fences have their interior rewritten in full when in-sync, are left untouched when `yard:overridden`, and are removed when yard no longer emits them.
+6. User-authored content (sections, keys, comments without a `yard:` prefix) is preserved verbatim throughout.
+
+Re-running `yard apply` against the same configuration is also valid and is the natural way to repair a workspace where managed content has been accidentally deleted.
+
+### Removal
+
+Removal is the mirror of creation: when a module stops emitting a key (or block, or fence) that yard previously wrote, the next `apply` reconciles the disappearance.
+
+- **In-sync at removal** (`actual == default=`) → yard deletes the key/block entirely and reports `Deleted`. The user accepted yard's ownership; yard is now relinquishing it cleanly.
+- **Marker says `yard:managed` but value differs from `default=`** → `Conflict`, same as any other apply. Removal never gets to silently delete a divergent value; the user resolves the conflict first (revert → falls into the in-sync removal path on the next apply; or convert to `yard:overridden` → falls into the next bullet).
+- **`yard:overridden` at removal** → no change, reported as `Overridden`. The user explicitly took the key over; yard has no claim left to remove.
+- **`yard:omit` at removal** → no file change, reported as `Omitted`, and yard **emits a warning**. The omit already suppressed yard's emission, so there is no managed key on disk to act on; the omit marker itself is a user-authored comment line. Its target is no longer in the adaptor's managed set, which makes it a stale omit — yard warns (per the standard `yard:omit` rule above) so the user knows the marker is now redundant, and otherwise leaves the line untouched. Cleaning up the marker is the user's call.
+
+Array-valued keys handle removal mechanically without a new action variant: items in the previous `default=` that drop out of the new desired simply aren't in `desired ∪ user-additions` on the rewrite, so they vanish. The whole-key actions above apply if the *entire* array is removed.
+
+Block-fenced files remove whole fences (matched by id): in-sync fences are deleted (the open/close markers and everything between), reported as `Deleted` against the fence id. Overridden fences stay. There is no in-fence conflict state — fence interiors are all-or-nothing.
 
 ### Semantic layer
 
@@ -331,5 +393,3 @@ Migration from one yard version to the next is **not its own verb** — it is on
 **Distribution:**
 
 - Standalone binary via `curl | sh` install script with `--version` pin support. Pre-built binaries published to GitHub releases.
-
-Everything else (additional file types, package-level files like `package.xml`/`CMakeLists.txt`, status/dry-run verbs, user-authored or remote modules, workflow shortcut verbs, alternate install channels) is deferred until the v1 mechanic is solid.
