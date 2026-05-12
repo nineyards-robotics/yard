@@ -15,9 +15,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::RuntimeContext;
-use crate::adaptors::{ApplyOutcome, KeyAction};
-use crate::engine::MergeError;
+use crate::adaptors::{Adaptor, ApplyOutcome, KeyAction, MergeError, PlanError};
+use crate::{Contribution, RuntimeContext};
 
 /// Fragment a module wants merged into the gitignore. Targets one fence —
 /// `id` names the block (`[A-Za-z0-9_-]+`); `lines` are raw gitignore
@@ -81,6 +80,8 @@ impl GitignoreDesired {
 pub struct GitignoreAdaptor;
 
 impl GitignoreAdaptor {
+    pub const ID: &'static str = "gitignore";
+
     pub fn path(&self, ctx: &RuntimeContext) -> PathBuf {
         ctx.workspace.join(".gitignore")
     }
@@ -138,7 +139,55 @@ impl GitignoreAdaptor {
             }
         }
 
-        Ok(ApplyOutcome { contents, actions })
+        Ok(ApplyOutcome {
+            contents: Some(contents),
+            actions,
+        })
+    }
+}
+
+impl Adaptor for GitignoreAdaptor {
+    fn id(&self) -> &'static str {
+        Self::ID
+    }
+
+    fn path(&self, ctx: &RuntimeContext) -> PathBuf {
+        GitignoreAdaptor::path(self, ctx)
+    }
+
+    fn plan(
+        &self,
+        contribs: Vec<(&'static str, Contribution)>,
+        existing: Option<&str>,
+        ctx: &RuntimeContext,
+    ) -> Result<ApplyOutcome, PlanError> {
+        let mine = contribs.into_iter().map(|(module, c)| match c {
+            Contribution::Gitignore(g) => (module, g),
+            // The engine routes by `Contribution::adaptor_id`; a mismatch is
+            // a wiring bug, not user input.
+            other => unreachable!(
+                "engine routed {} contribution to gitignore adaptor",
+                other.adaptor_id()
+            ),
+        });
+        let desired = GitignoreDesired::from_contributions(mine)?;
+        // Nothing to manage and no file on disk: signal "no file" so the
+        // engine doesn't materialise an empty `.gitignore`. Removal of
+        // stale managed fences when a file *does* exist is a separate
+        // adaptor-level concern (DESIGN.md §Removal) that isn't
+        // implemented yet — when it lands, this is where the
+        // `contents: None` signal will get used for whole-file removal
+        // as well.
+        if desired.fences.is_empty() && existing.is_none() {
+            return Ok(ApplyOutcome {
+                contents: None,
+                actions: Vec::new(),
+            });
+        }
+        self.apply(&desired, existing, ctx).map_err(|e| PlanError::Parse {
+            adaptor: Self::ID,
+            source: Box::new(e),
+        })
     }
 }
 

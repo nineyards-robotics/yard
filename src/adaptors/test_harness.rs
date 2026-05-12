@@ -47,7 +47,15 @@ where
     };
     let outcome = apply(&desired, existing.as_deref(), &runtime);
 
-    assert_golden(&dir.join(harness.expected_filename), &outcome.contents);
+    // No fixture currently exercises the "no file" outcome; if one does
+    // later, extend the harness to assert file absence rather than golden
+    // contents. Until then, an unexpected `None` is a bug in the adaptor,
+    // not a fixture-supported scenario.
+    let contents = outcome
+        .contents
+        .as_deref()
+        .expect("fixture does not yet cover deletion outcomes");
+    assert_golden(&dir.join(harness.expected_filename), contents);
     assert_golden(&dir.join("expected.actions"), &format_actions(&outcome.actions));
 }
 

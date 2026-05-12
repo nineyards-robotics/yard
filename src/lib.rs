@@ -28,7 +28,7 @@ pub mod modules;
 #[cfg(test)]
 mod test_support;
 
-pub use engine::{EngineError, EngineReport, FileReport};
+pub use engine::{EngineError, EngineReport, FileOutcome, FileReport};
 
 /// Parsed contents of `yard.toml`.
 ///
@@ -81,13 +81,25 @@ impl YardConfig {
 
 /// Typed contribution fragments emitted by modules.
 ///
-/// Each variant targets exactly one adaptor. Modules emit fragments; the
-/// engine groups all contributions per adaptor and merges them into the
-/// adaptor's `Desired` value. New adaptors add a new variant here.
+/// Each variant targets exactly one adaptor; [`Contribution::adaptor_id`] is
+/// the routing key the engine uses to fan contributions out to
+/// `adaptors::registry()`. Adding a new adaptor means: add a variant, add a
+/// match arm to `adaptor_id`, and register the adaptor — no engine changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Contribution {
     Gitignore(crate::adaptors::gitignore::GitignoreContribution),
     Pixi(crate::adaptors::pixi::PixiContribution),
+}
+
+impl Contribution {
+    /// Id of the adaptor this contribution targets. Must match the
+    /// corresponding [`Adaptor::id`](crate::adaptors::Adaptor::id).
+    pub fn adaptor_id(&self) -> &'static str {
+        match self {
+            Contribution::Gitignore(_) => crate::adaptors::gitignore::GitignoreAdaptor::ID,
+            Contribution::Pixi(_) => crate::adaptors::pixi::PixiAdaptor::ID,
+        }
+    }
 }
 
 /// Runtime context for one yard invocation: everything that's true about the

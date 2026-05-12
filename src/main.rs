@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use yard::adaptors::KeyAction;
-use yard::engine::{self, FileReport};
+use yard::engine::{self, FileOutcome, FileReport};
 use yard::{ConfigError, EngineError, YardConfig};
 
 #[derive(Parser)]
@@ -65,9 +65,19 @@ fn print_report(workspace: &PathBuf, files: &[FileReport]) {
     }
     for file in files {
         let display = file.path.strip_prefix(workspace).unwrap_or(&file.path);
-        println!("{}:", display.display());
-        for action in &file.actions {
-            print_action(action);
+        match &file.outcome {
+            FileOutcome::Wrote(actions) => {
+                println!("{}:", display.display());
+                for action in actions {
+                    print_action(action);
+                }
+            }
+            FileOutcome::Deleted(actions) => {
+                println!("{} (deleted):", display.display());
+                for action in actions {
+                    print_action(action);
+                }
+            }
         }
     }
 }
