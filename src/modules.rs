@@ -5,6 +5,7 @@
 //! below. The crate-level types `YardConfig` and `Contribution` are imported
 //! from the crate root — they're yard's vocabulary, not engine-owned.
 
+pub mod pixi_env;
 pub mod ros_workspace;
 
 #[cfg(test)]
@@ -27,7 +28,13 @@ pub fn registry() -> &'static [Module] {
     MODULES
 }
 
-static MODULES: &[Module] = &[Module {
-    id: "ros_workspace",
-    contribute: ros_workspace::contribute,
-}];
+static MODULES: &[Module] = &[
+    Module {
+        id: "ros_workspace",
+        contribute: ros_workspace::contribute,
+    },
+    Module {
+        id: "pixi_env",
+        contribute: pixi_env::contribute,
+    },
+];

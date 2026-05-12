@@ -41,6 +41,18 @@ pub enum RosDistro {
     Rolling,
 }
 
+impl RosDistro {
+    /// Lowercase string form matching serde's `rename_all = "lowercase"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Humble => "humble",
+            Self::Jazzy => "jazzy",
+            Self::Kilted => "kilted",
+            Self::Rolling => "rolling",
+        }
+    }
+}
+
 /// Parsed contents of `yard.toml`.
 ///
 /// New top-level keys must always default when absent (see DESIGN.md:

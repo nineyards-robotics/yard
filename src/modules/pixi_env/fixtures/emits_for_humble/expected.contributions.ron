@@ -1,0 +1,13 @@
+[
+    Pixi(PixiContribution(
+        workspace_name: Some("emits_for_humble"),
+        channels: [
+            "conda-forge",
+            "robostack-humble",
+        ],
+        dependencies: {
+            "python": ">=3.11",
+            "ros-humble-desktop": "*",
+        },
+    )),
+]

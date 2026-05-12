@@ -1,0 +1,13 @@
+[
+    Pixi(PixiContribution(
+        workspace_name: Some("emits_for_jazzy"),
+        channels: [
+            "conda-forge",
+            "robostack-jazzy",
+        ],
+        dependencies: {
+            "python": ">=3.11",
+            "ros-jazzy-desktop": "*",
+        },
+    )),
+]
