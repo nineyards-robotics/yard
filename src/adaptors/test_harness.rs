@@ -57,6 +57,10 @@ where
         .expect("fixture does not yet cover deletion outcomes");
     assert_golden(&dir.join(harness.expected_filename), contents);
     assert_golden(&dir.join("expected.actions"), &format_actions(&outcome.actions));
+    assert_golden(
+        &dir.join("expected.warnings"),
+        &format_warnings(&outcome.warnings),
+    );
 }
 
 /// Render a `Vec<KeyAction>` as the canonical `expected.actions` form: one
@@ -70,8 +74,22 @@ pub fn format_actions(actions: &[KeyAction]) -> String {
             KeyAction::Updated { key, .. } => ("Updated", key),
             KeyAction::Reemitted { key, .. } => ("Reemitted", key),
             KeyAction::Overridden { key } => ("Overridden", key),
+            KeyAction::Deleted { key, .. } => ("Deleted", key),
+            KeyAction::Omitted { key } => ("Omitted", key),
         };
         out.push_str(&format!("{kind} {key}\n"));
+    }
+    out
+}
+
+/// Render warnings one-per-line for the `expected.warnings` golden. Empty
+/// vec yields an empty string — the golden is still asserted (an empty
+/// file) so any unexpected warning fails the test loudly.
+pub fn format_warnings(warnings: &[String]) -> String {
+    let mut out = String::new();
+    for w in warnings {
+        out.push_str(w);
+        out.push('\n');
     }
     out
 }

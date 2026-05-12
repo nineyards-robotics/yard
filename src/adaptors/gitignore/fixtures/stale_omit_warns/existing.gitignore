@@ -1,0 +1,2 @@
+# yard:omit standard-ignores
+.env

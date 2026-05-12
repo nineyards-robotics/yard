@@ -94,21 +94,51 @@ impl GitignoreAdaptor {
     ) -> Result<ApplyOutcome, GitignoreParseError> {
         let mut contents = existing.unwrap_or("").to_string();
         let mut actions = Vec::new();
+        let mut warnings = Vec::new();
         let path = self.path(ctx);
 
-        for fence in &desired.fences {
-            // Re-parse for each fence: a previous splice/append may have
-            // shifted byte offsets. Cheap for the file sizes we deal with
-            // and keeps the splice math correct without offset bookkeeping.
-            // Splices only touch fence interiors, so a file that parsed
-            // once parses the same way on every iteration.
-            let parsed = parse_fences(&contents).map_err(|p| GitignoreParseError {
+        let parse = |c: &str| {
+            parse_markers(c).map_err(|p| GitignoreParseError {
                 path: path.clone(),
                 line: p.line,
                 kind: p.kind,
-            })?;
+            })
+        };
+
+        // Omits are a property of the *file* (line comments), not of any
+        // particular fence — capture which ids the user wants suppressed
+        // up front. Malformed omits (`# yard:omit foo.bar`) become
+        // warnings only; they never block emission.
+        let initial = parse(&contents)?;
+        let mut omit_ids: Vec<String> = Vec::new();
+        for omit in &initial.omits {
+            match &omit.target {
+                OmitTarget::Slug(id) => omit_ids.push(id.clone()),
+                OmitTarget::Invalid(raw) => warnings.push(format!(
+                    "yard:omit `{raw}` is not a valid id slug (allowed: [A-Za-z0-9_-]+); ignoring"
+                )),
+            }
+        }
+
+        let desired_ids: Vec<&str> = desired.fences.iter().map(|f| f.id.as_str()).collect();
+
+        // Desired walk — reconcile each desired fence against the on-disk
+        // file. Skip ids in `omit_ids`: the user said no, so we do not
+        // emit. Any on-disk managed fence with an omitted id is removed
+        // in the cleanup pass below.
+        for fence in &desired.fences {
+            if omit_ids.iter().any(|o| o == &fence.id) {
+                continue;
+            }
+            // Re-parse for each fence: a previous splice/append may have
+            // shifted byte offsets. Cheap for the file sizes we deal
+            // with and keeps the splice math correct without offset
+            // bookkeeping. Splices only touch fence interiors, so a
+            // file that parsed once parses the same way on every
+            // iteration.
+            let parsed = parse(&contents)?;
             let inner = render_inner(&fence.lines);
-            match parsed.find(&fence.id) {
+            match parsed.find_fence(&fence.id) {
                 Some(found) if found.kind == FenceKind::Overridden => {
                     actions.push(KeyAction::Overridden {
                         key: fence.id.clone(),
@@ -139,9 +169,81 @@ impl GitignoreAdaptor {
             }
         }
 
+        // Cleanup pass: walk every on-disk fence the desired-walk did not
+        // touch. This catches three cases:
+        //  - stale managed (id not in desired, not omitted) → delete.
+        //  - stale overridden (id not in desired) → preserved, reported.
+        //  - omitted managed (id in omits, regardless of desired) →
+        //    delete and warn that the omit took effect. Overridden
+        //    fences with an omit are left alone — yard never touches
+        //    overridden content.
+        // Actions are pushed in on-disk (top-down) order so the report
+        // mirrors what the user sees in the file. Excise is done
+        // bottom-up afterwards so byte offsets stay valid.
+        let cleanup = parse(&contents)?;
+        let mut handled_on_disk: Vec<String> = Vec::new();
+        let mut to_excise: Vec<&FoundFence> = Vec::new();
+        for (id, fence) in &cleanup.fences {
+            let in_desired = desired_ids.iter().any(|d| d == id);
+            let in_omit = omit_ids.iter().any(|o| o == id);
+            if in_desired && !in_omit {
+                continue; // desired walk already handled it
+            }
+            handled_on_disk.push(id.clone());
+            match fence.kind {
+                FenceKind::Overridden => actions.push(KeyAction::Overridden { key: id.clone() }),
+                FenceKind::Managed => {
+                    actions.push(KeyAction::Deleted {
+                        key: id.clone(),
+                        was: fence.inner.clone(),
+                    });
+                    if in_omit {
+                        warnings.push(format!(
+                            "yard:omit `{id}` removed the previously managed fence in .gitignore"
+                        ));
+                    }
+                    to_excise.push(fence);
+                }
+            }
+        }
+        to_excise.sort_by_key(|f| std::cmp::Reverse(f.open_start));
+        for fence in to_excise {
+            contents = excise(&contents, fence.open_start, fence.close_end);
+        }
+
+        // Omits that matched no on-disk fence. In-desired omits are the
+        // ordinary "user said no, yard would have emitted" case — report
+        // Omitted with no warning. Out-of-desired omits are stale (no
+        // managed target left to suppress); report Omitted *and* warn.
+        for omit_id in &omit_ids {
+            if handled_on_disk.iter().any(|h| h == omit_id) {
+                continue;
+            }
+            actions.push(KeyAction::Omitted {
+                key: omit_id.clone(),
+            });
+            if !desired_ids.iter().any(|d| d == omit_id) {
+                warnings.push(format!(
+                    "yard:omit `{omit_id}` does not match any currently-managed fence in .gitignore",
+                ));
+            }
+        }
+
+        // If after all reconciliation the file would be empty, signal
+        // deletion. DESIGN.md doesn't spell out the empty-file case for
+        // block-fenced files, but the spirit is symmetric with creation:
+        // when nothing is left to manage and the user kept nothing of
+        // their own, the file shouldn't exist.
+        let contents_out = if contents.is_empty() {
+            None
+        } else {
+            Some(contents)
+        };
+
         Ok(ApplyOutcome {
-            contents: Some(contents),
+            contents: contents_out,
             actions,
+            warnings,
         })
     }
 }
@@ -172,16 +274,15 @@ impl Adaptor for GitignoreAdaptor {
         });
         let desired = GitignoreDesired::from_contributions(mine)?;
         // Nothing to manage and no file on disk: signal "no file" so the
-        // engine doesn't materialise an empty `.gitignore`. Removal of
-        // stale managed fences when a file *does* exist is a separate
-        // adaptor-level concern (DESIGN.md §Removal) that isn't
-        // implemented yet — when it lands, this is where the
-        // `contents: None` signal will get used for whole-file removal
-        // as well.
+        // engine doesn't materialise an empty `.gitignore`. When a file
+        // *does* exist, `apply` runs the full removal pass — stale
+        // managed fences get spliced out, overridden ones reported, and
+        // the file is deleted if nothing remains.
         if desired.fences.is_empty() && existing.is_none() {
             return Ok(ApplyOutcome {
                 contents: None,
                 actions: Vec::new(),
+                warnings: Vec::new(),
             });
         }
         self.apply(&desired, existing, ctx).map_err(|e| PlanError::Parse {
@@ -260,6 +361,41 @@ fn splice(s: &str, start: usize, end: usize, replacement: &str) -> String {
     out
 }
 
+/// Remove the byte range `[start, end)` and one adjacent blank-line
+/// separator if there is one. `append_block` inserts a single blank line
+/// before a freshly-appended block; on removal we eat that separator so
+/// round-trip applies stay stable instead of accumulating blanks. The
+/// separator can be above (the common case) or below (when the excised
+/// block is at the very top of the file). Never eat more than one — any
+/// blank lines beyond the immediate separator are user-authored spacing.
+fn excise(s: &str, start: usize, end: usize) -> String {
+    let bytes = s.as_bytes();
+    // Blank line *above* — recognised as two consecutive `\n`s
+    // immediately before `start`. The byte at `start - 1` is the line
+    // ending of whatever's above; the byte at `start - 2` being `\n` too
+    // means that line is empty (i.e., a blank separator).
+    let trim_start = if start >= 2 && bytes[start - 1] == b'\n' && bytes[start - 2] == b'\n' {
+        start - 1
+    } else {
+        start
+    };
+    // Blank line *below* — only consumed when the excise reaches the
+    // top of the file (no content above to "own" the separator) or
+    // when the excise immediately follows another excised block, i.e.
+    // there's no content immediately above either. In both cases the
+    // remaining file would otherwise start with `\n`.
+    let nothing_above = trim_start == 0 || bytes[trim_start - 1] == b'\n';
+    let trim_end = if nothing_above && trim_start == start && s[end..].starts_with('\n') {
+        end + 1
+    } else {
+        end
+    };
+    let mut out = String::with_capacity(s.len() - (trim_end - trim_start));
+    out.push_str(&s[..trim_start]);
+    out.push_str(&s[trim_end..]);
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FenceKind {
     Managed,
@@ -279,23 +415,41 @@ struct FoundFence {
 }
 
 #[derive(Debug, Default)]
-struct ParsedFences {
+struct ParsedMarkers {
     fences: Vec<(String, FoundFence)>,
+    omits: Vec<OmitLine>,
 }
 
-impl ParsedFences {
-    fn find(&self, id: &str) -> Option<&FoundFence> {
+impl ParsedMarkers {
+    fn find_fence(&self, id: &str) -> Option<&FoundFence> {
         self.fences.iter().find(|(k, _)| k == id).map(|(_, v)| v)
     }
 }
 
-/// Walk `content` for all yard fences. Any line that looks like a yard
-/// marker (matches the `# >>> yard:` / `# <<< yard:` prefix) but does not
-/// parse cleanly aborts the walk with a [`PendingParseError`] carrying the
-/// 1-based line number and the specific [`ParseErrorKind`]. The caller
-/// attaches the file path.
-fn parse_fences(content: &str) -> Result<ParsedFences, PendingParseError> {
-    let mut out = ParsedFences::default();
+#[derive(Debug, Clone)]
+struct OmitLine {
+    target: OmitTarget,
+}
+
+#[derive(Debug, Clone)]
+enum OmitTarget {
+    /// Argument was a well-formed slug — yard knows what it refers to and
+    /// can compare against the adaptor's currently-managed ids.
+    Slug(String),
+    /// Argument was malformed (e.g. contained a `.`); surfaced as a
+    /// warning. DESIGN.md: "the adaptor warns and otherwise ignores the
+    /// line." Stored as the raw argument so the warning can echo it.
+    Invalid(String),
+}
+
+/// Walk `content` for all yard fences and omit comments. Any line that
+/// looks like a yard fence marker (`# >>> yard:` / `# <<< yard:` prefix)
+/// but does not parse cleanly aborts the walk with a [`PendingParseError`]
+/// carrying the 1-based line number and the specific [`ParseErrorKind`].
+/// `# yard:omit <arg>` is non-fatal: a malformed argument produces an
+/// [`OmitTarget::Invalid`] which the caller surfaces as a warning.
+fn parse_markers(content: &str) -> Result<ParsedMarkers, PendingParseError> {
+    let mut out = ParsedMarkers::default();
     let mut open: Option<OpenState> = None;
     let mut cursor = 0usize;
 
@@ -357,6 +511,12 @@ fn parse_fences(content: &str) -> Result<ParsedFences, PendingParseError> {
                     inner: inner.to_string(),
                 },
             ));
+        } else if open.is_none() {
+            // Omits are only recognised outside a fence; lines inside a
+            // managed/overridden block are part of that block's payload.
+            if let Some(target) = parse_omit(trimmed) {
+                out.omits.push(OmitLine { target });
+            }
         }
     }
 
@@ -368,6 +528,24 @@ fn parse_fences(content: &str) -> Result<ParsedFences, PendingParseError> {
     }
 
     Ok(out)
+}
+
+/// Recognise `# yard:omit <arg>` (with the standard `[A-Za-z0-9_.-]+`
+/// charset from DESIGN.md — gitignore's notion of "valid" is the
+/// fence-id slug, so anything with a dot becomes `Invalid` and surfaces
+/// as a warning). Returns `None` when the line is not a yard:omit
+/// comment at all.
+fn parse_omit(line: &str) -> Option<OmitTarget> {
+    let rest = line.strip_prefix("# yard:omit")?;
+    let arg = rest.trim();
+    if arg.is_empty() {
+        return Some(OmitTarget::Invalid(String::new()));
+    }
+    if is_valid_slug(arg) {
+        Some(OmitTarget::Slug(arg.to_string()))
+    } else {
+        Some(OmitTarget::Invalid(arg.to_string()))
+    }
 }
 
 struct OpenState {
@@ -474,13 +652,46 @@ mod tests {
         });
     }
 
-    #[test] fn create_fresh()                    { run("create_fresh"); }
-    #[test] fn in_sync()                         { run("in_sync"); }
-    #[test] fn update_in_place()                 { run("update_in_place"); }
-    #[test] fn appends_when_no_fence()           { run("appends_when_no_fence"); }
-    #[test] fn overridden_block()                { run("overridden_block"); }
-    #[test] fn multiple_fences_fresh()           { run("multiple_fences_fresh"); }
-    #[test] fn multiple_fences_with_existing()   { run("multiple_fences_with_existing"); }
+    #[test] fn create_fresh()                       { run("create_fresh"); }
+    #[test] fn in_sync()                            { run("in_sync"); }
+    #[test] fn update_in_place()                    { run("update_in_place"); }
+    #[test] fn appends_when_no_fence()              { run("appends_when_no_fence"); }
+    #[test] fn overridden_block()                   { run("overridden_block"); }
+    #[test] fn multiple_fences_fresh()              { run("multiple_fences_fresh"); }
+    #[test] fn multiple_fences_with_existing()      { run("multiple_fences_with_existing"); }
+    #[test] fn removes_stale_managed_fence()        { run("removes_stale_managed_fence"); }
+    #[test] fn overridden_stale_fence_preserved()   { run("overridden_stale_fence_preserved"); }
+    #[test] fn omit_suppresses_emission()           { run("omit_suppresses_emission"); }
+    #[test] fn stale_omit_warns()                   { run("stale_omit_warns"); }
+    #[test] fn invalid_omit_warns()                 { run("invalid_omit_warns"); }
+    #[test] fn mixed_retention_and_removal()        { run("mixed_retention_and_removal"); }
+    #[test] fn multiple_stale_managed_fences()      { run("multiple_stale_managed_fences"); }
+    #[test] fn omit_removes_existing_managed_fence() { run("omit_removes_existing_managed_fence"); }
+
+    /// Deletion of the file itself is shape-incompatible with the
+    /// golden-fixture harness (which always expects file contents). Keep
+    /// this single case inline rather than growing a "no file" mode into
+    /// the harness for one scenario.
+    #[test]
+    fn signals_deletion_when_no_content_remains() {
+        let existing =
+            "# >>> yard:managed id=defunct >>>\nbuild/\n# <<< yard:managed id=defunct <<<\n";
+        let desired = GitignoreDesired::default();
+        let runtime = RuntimeContext {
+            workspace: std::path::Path::new("/tmp"),
+            yard_version: env!("CARGO_PKG_VERSION"),
+        };
+        let outcome = GitignoreAdaptor.apply(&desired, Some(existing), &runtime).unwrap();
+        assert_eq!(outcome.contents, None);
+        assert_eq!(
+            outcome.actions,
+            vec![KeyAction::Deleted {
+                key: "defunct".into(),
+                was: "build/".into(),
+            }],
+        );
+        assert!(outcome.warnings.is_empty());
+    }
 
     /// Pure merge logic — different shape from `apply`, so it stays inline.
     #[test]

@@ -1,0 +1,7 @@
+# yard:omit standard-ignores
+
+# >>> yard:managed id=standard-ignores >>>
+build/
+install/
+log/
+# <<< yard:managed id=standard-ignores <<<

@@ -71,12 +71,15 @@ static ADAPTORS: &[&dyn Adaptor] = &[&gitignore::GitignoreAdaptor, &pixi::PixiAd
 /// file or no-ops). `Some("")` is distinct — an empty file the engine will
 /// materialise. `actions` records what happened to each managed key/block
 /// — used to print human-readable output during `yard apply`, and stays
-/// meaningful on deletes (e.g., per-fence `Deleted` actions once removal
-/// lands).
+/// meaningful on deletes (per-fence `Deleted` actions, etc.). `warnings`
+/// carries non-blocking notes the user should see — e.g. a `yard:omit`
+/// pointing at an id the adaptor no longer emits (DESIGN.md §"Removal":
+/// "no file change, reported as Omitted, and yard emits a warning").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyOutcome {
     pub contents: Option<String>,
     pub actions: Vec<KeyAction>,
+    pub warnings: Vec<String>,
 }
 
 /// Per-key (or per-block) action taken by an adaptor.
@@ -100,6 +103,14 @@ pub enum KeyAction {
     /// ownership and yard never touches it. Carries no `default=` payload —
     /// see DESIGN.md ("the marker carries no default= payload").
     Overridden { key: String },
+    /// Key/block was previously managed by yard but the adaptor no longer
+    /// wants it — yard removed it. `was` records what got deleted so the
+    /// CLI can narrate the change.
+    Deleted { key: String, was: String },
+    /// User wrote `# yard:omit <key>`; yard skipped this id (either
+    /// because it would otherwise re-emit, or because it has nothing to
+    /// emit and the omit is stale — the latter also produces a warning).
+    Omitted { key: String },
 }
 
 /// One planning-phase failure surfaced by [`Adaptor::plan`]. The engine

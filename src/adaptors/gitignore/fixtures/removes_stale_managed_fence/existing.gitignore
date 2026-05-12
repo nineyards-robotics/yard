@@ -1,0 +1,9 @@
+# personal
+secret.env
+.idea/
+
+# >>> yard:managed id=standard-ignores >>>
+build/
+install/
+log/
+# <<< yard:managed id=standard-ignores <<<

@@ -1,0 +1,9 @@
+# >>> yard:managed id=standard-ignores >>>
+build/
+install/
+log/
+# <<< yard:managed id=standard-ignores <<<
+
+# >>> yard:managed id=defunct >>>
+old/
+# <<< yard:managed id=defunct <<<

@@ -79,6 +79,9 @@ fn print_report(workspace: &PathBuf, files: &[FileReport]) {
                 }
             }
         }
+        for warning in &file.warnings {
+            eprintln!("warning: {}: {warning}", display.display());
+        }
     }
 }
 
@@ -88,5 +91,7 @@ fn print_action(action: &KeyAction) {
         KeyAction::Updated { key, .. } => println!("  updated     {key}"),
         KeyAction::Reemitted { key, .. } => println!("  emitted     {key}"),
         KeyAction::Overridden { key } => println!("  overridden  {key}"),
+        KeyAction::Deleted { key, .. } => println!("  deleted     {key}"),
+        KeyAction::Omitted { key } => println!("  omitted     {key}"),
     }
 }

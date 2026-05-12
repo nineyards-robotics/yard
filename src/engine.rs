@@ -22,6 +22,10 @@ use crate::{Contribution, ModuleContext, RuntimeContext, YardConfig, adaptors, m
 pub struct FileReport {
     pub path: PathBuf,
     pub outcome: FileOutcome,
+    /// Non-blocking notes the adaptor surfaced for this file (e.g. stale
+    /// `yard:omit` markers pointing at ids the adaptor no longer emits).
+    /// Warnings never block an apply — the engine prints them and moves on.
+    pub warnings: Vec<String>,
 }
 
 /// What happened to one managed file during the commit phase. Both arms
@@ -100,11 +104,17 @@ enum PlannedCommit {
     Write {
         contents: String,
         actions: Vec<KeyAction>,
+        warnings: Vec<String>,
     },
     Delete {
         actions: Vec<KeyAction>,
+        warnings: Vec<String>,
     },
-    Noop,
+    /// Nothing to write or delete. `warnings` is still carried so the
+    /// engine can surface them, even when no file change happens.
+    Noop {
+        warnings: Vec<String>,
+    },
 }
 
 /// Collapse the adaptor's typed intent (`ApplyOutcome`) plus plan-time
@@ -116,11 +126,15 @@ fn resolve_commit(outcome: ApplyOutcome, existed: bool) -> PlannedCommit {
         (Some(contents), _) => PlannedCommit::Write {
             contents,
             actions: outcome.actions,
+            warnings: outcome.warnings,
         },
         (None, true) => PlannedCommit::Delete {
             actions: outcome.actions,
+            warnings: outcome.warnings,
         },
-        (None, false) => PlannedCommit::Noop,
+        (None, false) => PlannedCommit::Noop {
+            warnings: outcome.warnings,
+        },
     }
 }
 
@@ -193,7 +207,11 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
     let mut report = EngineReport::default();
     for file in planned {
         match file.commit {
-            PlannedCommit::Write { contents, actions } => {
+            PlannedCommit::Write {
+                contents,
+                actions,
+                warnings,
+            } => {
                 fs::write(&file.path, &contents).map_err(|source| EngineError::Write {
                     path: file.path.clone(),
                     source,
@@ -201,9 +219,10 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
                 report.files.push(FileReport {
                     path: file.path,
                     outcome: FileOutcome::Wrote(actions),
+                    warnings,
                 });
             }
-            PlannedCommit::Delete { actions } => {
+            PlannedCommit::Delete { actions, warnings } => {
                 match fs::remove_file(&file.path) {
                     Ok(()) => {}
                     // Raced with someone else deleting it — treat the
@@ -219,9 +238,20 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
                 report.files.push(FileReport {
                     path: file.path,
                     outcome: FileOutcome::Deleted(actions),
+                    warnings,
                 });
             }
-            PlannedCommit::Noop => {}
+            // No file change to report. Warnings in this branch are
+            // structurally unreachable today (an adaptor with no file on
+            // disk and no contributions has nothing to warn about), but
+            // the assertion catches future drift before warnings get
+            // silently dropped.
+            PlannedCommit::Noop { warnings } => {
+                debug_assert!(
+                    warnings.is_empty(),
+                    "Noop adaptor outcome produced warnings; extend FileOutcome before allowing this",
+                );
+            }
         }
     }
 

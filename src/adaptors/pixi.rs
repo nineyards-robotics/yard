@@ -56,6 +56,7 @@ impl PixiAdaptor {
         Ok(ApplyOutcome {
             contents: Some(existing.unwrap_or_default().to_string()),
             actions: Vec::new(),
+            warnings: Vec::new(),
         })
     }
 }
@@ -91,6 +92,7 @@ impl Adaptor for PixiAdaptor {
             return Ok(ApplyOutcome {
                 contents: None,
                 actions: Vec::new(),
+                warnings: Vec::new(),
             });
         }
         self.apply(&desired, existing, ctx).map_err(|e| PlanError::Parse {

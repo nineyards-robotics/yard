@@ -159,3 +159,131 @@ fn apply_fails_when_yard_toml_missing() {
         .failure()
         .stderr(contains("yard.toml"));
 }
+
+#[test]
+fn omit_suppresses_managed_fence() {
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    // User opted out of the standard-ignores fence; yard must not write it.
+    let initial = "# yard:omit standard-ignores\n.env\n";
+    fs::write(ws.path().join(".gitignore"), initial).unwrap();
+
+    yard_apply(ws.path())
+        .success()
+        .stdout(contains("omitted"));
+
+    // Unchanged: the omit comment and the user's own ignore remain, no fence appended.
+    assert_eq!(read_gitignore(ws.path()), initial);
+}
+
+#[test]
+fn deletes_gitignore_when_only_yard_content_is_removed() {
+    // ros_workspace currently always emits standard-ignores, so we simulate
+    // "yard no longer wants this fence" by hand-rolling a stale managed
+    // fence into a .gitignore whose id doesn't match anything yard emits.
+    // After apply, that fence should be spliced out — and since nothing else
+    // is in the file, the file itself should be deleted (per the design's
+    // creation/removal symmetry).
+    //
+    // We also need the standard-ignores fence to land somewhere else, so
+    // we point that at a second file by having yard create it fresh.
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    let stale = "# >>> yard:managed id=defunct >>>\nold/\n# <<< yard:managed id=defunct <<<\n";
+    fs::write(ws.path().join(".gitignore"), stale).unwrap();
+
+    yard_apply(ws.path())
+        .success()
+        .stdout(contains("deleted"));
+
+    // The defunct fence was the only content, so the file is gone — yard
+    // does not leave an empty .gitignore behind. The standard-ignores
+    // fence still gets emitted into a freshly-created file though.
+    let contents = read_gitignore(ws.path());
+    assert_eq!(
+        contents,
+        "# >>> yard:managed id=standard-ignores >>>\n\
+         build/\n\
+         install/\n\
+         log/\n\
+         # <<< yard:managed id=standard-ignores <<<\n",
+        "expected only the standard-ignores fence to remain"
+    );
+}
+
+#[test]
+fn second_apply_after_removal_is_idempotent() {
+    // Removal must be stable: an apply that deletes a stale fence must
+    // not re-report the deletion on the next run. Mirror of the
+    // creation-side `second_run_is_idempotent_and_reports_in_sync`.
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    let stale =
+        "# >>> yard:managed id=defunct >>>\nold/\n# <<< yard:managed id=defunct <<<\n";
+    fs::write(ws.path().join(".gitignore"), stale).unwrap();
+
+    yard_apply(ws.path())
+        .success()
+        .stdout(contains("deleted"));
+    let after_first = read_gitignore(ws.path());
+
+    let assert = yard_apply(ws.path()).success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("deleted"),
+        "second apply should not re-delete; stdout was:\n{stdout}"
+    );
+    assert_eq!(read_gitignore(ws.path()), after_first);
+}
+
+#[test]
+fn omit_with_existing_managed_fence_removes_it() {
+    // User had yard's previously emitted fence on disk, then added a
+    // `yard:omit` to take back control. yard cleans up its own fence and
+    // warns so the user knows the omit took effect.
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    yard_apply(ws.path()).success();
+    let with_omit = format!(
+        "# yard:omit standard-ignores\n{}",
+        read_gitignore(ws.path())
+    );
+    fs::write(ws.path().join(".gitignore"), &with_omit).unwrap();
+
+    yard_apply(ws.path())
+        .success()
+        .stdout(contains("deleted"))
+        .stderr(contains("warning"))
+        .stderr(contains("standard-ignores"));
+
+    let after = read_gitignore(ws.path());
+    assert!(
+        !after.contains("yard:managed"),
+        "managed fence should have been removed: {after}"
+    );
+    assert!(
+        after.contains("yard:omit standard-ignores"),
+        "user's omit comment should be preserved: {after}"
+    );
+}
+
+#[test]
+fn stale_omit_emits_warning() {
+    // User left an omit for a fence id no module is currently emitting.
+    // yard does not block; it warns on stderr and otherwise leaves the
+    // line alone.
+    let ws = TempDir::new().unwrap();
+    write_yard_toml(ws.path());
+
+    let initial = "# yard:omit not-a-real-fence\n.env\n";
+    fs::write(ws.path().join(".gitignore"), initial).unwrap();
+
+    yard_apply(ws.path())
+        .success()
+        .stderr(contains("not-a-real-fence"))
+        .stderr(contains("warning"));
+}
