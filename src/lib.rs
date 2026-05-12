@@ -18,6 +18,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -60,12 +61,16 @@ pub enum ConfigError {
     },
 }
 
-impl YardConfig {
+impl FromStr for YardConfig {
+    type Err = toml::de::Error;
+
     /// Parse a `yard.toml` from an in-memory string.
-    pub fn from_str(s: &str) -> Result<Self, toml::de::Error> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         toml::from_str(s)
     }
+}
 
+impl YardConfig {
     /// Read and parse `yard.toml` from disk, attaching `path` to any error.
     pub fn from_path(path: &Path) -> Result<Self, ConfigError> {
         let contents = fs::read_to_string(path).map_err(|source| ConfigError::Read {

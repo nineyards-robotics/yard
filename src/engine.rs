@@ -87,6 +87,54 @@ fn format_plan_errors(errors: &[PlanError]) -> String {
     out
 }
 
+struct PlannedFile {
+    path: PathBuf,
+    commit: PlannedCommit,
+}
+
+/// What the commit phase will do to one managed file. Resolved once at
+/// plan time by [`resolve_commit`] so the commit loop doesn't have to
+/// re-derive "delete vs no-op" from the adaptor's `Option<String>`
+/// contents plus a separate existence flag.
+enum PlannedCommit {
+    Write {
+        contents: String,
+        actions: Vec<KeyAction>,
+    },
+    Delete {
+        actions: Vec<KeyAction>,
+    },
+    Noop,
+}
+
+/// Collapse the adaptor's typed intent (`ApplyOutcome`) plus plan-time
+/// knowledge of file existence into a single typed commit action. Doing
+/// this at plan time keeps the commit loop a clean three-way match — no
+/// loose `existed` flag to carry past planning.
+fn resolve_commit(outcome: ApplyOutcome, existed: bool) -> PlannedCommit {
+    match (outcome.contents, existed) {
+        (Some(contents), _) => PlannedCommit::Write {
+            contents,
+            actions: outcome.actions,
+        },
+        (None, true) => PlannedCommit::Delete {
+            actions: outcome.actions,
+        },
+        (None, false) => PlannedCommit::Noop,
+    }
+}
+
+fn read_if_exists(path: &Path) -> Result<Option<String>, EngineError> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(EngineError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 /// Run every module, route each contribution to its adaptor by id, then
 /// plan every adaptor in registry order before committing any writes. The
 /// plan-then-commit split is what makes apply atomic — see DESIGN.md
@@ -178,52 +226,4 @@ pub fn run(config: &YardConfig, workspace: &Path) -> Result<EngineReport, Engine
     }
 
     Ok(report)
-}
-
-/// Collapse the adaptor's typed intent (`ApplyOutcome`) plus plan-time
-/// knowledge of file existence into a single typed commit action. Doing
-/// this at plan time keeps the commit loop a clean three-way match — no
-/// loose `existed` flag to carry past planning.
-fn resolve_commit(outcome: ApplyOutcome, existed: bool) -> PlannedCommit {
-    match (outcome.contents, existed) {
-        (Some(contents), _) => PlannedCommit::Write {
-            contents,
-            actions: outcome.actions,
-        },
-        (None, true) => PlannedCommit::Delete {
-            actions: outcome.actions,
-        },
-        (None, false) => PlannedCommit::Noop,
-    }
-}
-
-struct PlannedFile {
-    path: PathBuf,
-    commit: PlannedCommit,
-}
-
-/// What the commit phase will do to one managed file. Resolved once at
-/// plan time by [`resolve_commit`] so the commit loop doesn't have to
-/// re-derive "delete vs no-op" from the adaptor's `Option<String>`
-/// contents plus a separate existence flag.
-enum PlannedCommit {
-    Write {
-        contents: String,
-        actions: Vec<KeyAction>,
-    },
-    Delete {
-        actions: Vec<KeyAction>,
-    },
-    Noop,
-}
-
-fn read_if_exists(path: &Path) -> Result<Option<String>, EngineError> {
-    match fs::read_to_string(path) {
-        Ok(s) => Ok(Some(s)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(EngineError::Read {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
 }

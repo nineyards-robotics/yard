@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 
 use ron::ser::PrettyConfig;
 
