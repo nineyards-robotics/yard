@@ -43,23 +43,38 @@ fn run(name: &str) {
 #[test] fn scalar_omitted()                        { run("scalar_omitted"); }
 #[test] fn scalar_unmarked_attaches_marker()       { run("scalar_unmarked_attaches_marker"); }
 #[test] fn scalar_missing_reemitted()              { run("scalar_missing_reemitted"); }
+#[test] fn scalar_unparsable_default_reemits()     { run("scalar_unparsable_default_reemits"); }
+#[test] fn scalar_reemitted_creates_section()      { run("scalar_reemitted_creates_section"); }
 
 #[test] fn array_in_sync()                         { run("array_in_sync"); }
 #[test] fn array_updated()                         { run("array_updated"); }
 #[test] fn array_user_added_preserved()            { run("array_user_added_preserved"); }
+#[test] fn array_user_added_reorders()             { run("array_user_added_reorders"); }
 #[test] fn array_user_removed_is_conflict()        { run("array_user_removed_is_conflict"); }
 #[test] fn array_overridden()                      { run("array_overridden"); }
 #[test] fn array_desired_drops_element()           { run("array_desired_drops_element"); }
+#[test] fn array_unmarked_attaches_marker()        { run("array_unmarked_attaches_marker"); }
+#[test] fn array_missing_reemitted()               { run("array_missing_reemitted"); }
+#[test] fn array_omitted()                         { run("array_omitted"); }
 
 #[test] fn dependency_added()                      { run("dependency_added"); }
 #[test] fn dependency_in_sync()                    { run("dependency_in_sync"); }
+#[test] fn dependency_updated()                    { run("dependency_updated"); }
 #[test] fn dependency_conflict()                   { run("dependency_conflict"); }
+#[test] fn dependency_overridden()                 { run("dependency_overridden"); }
+#[test] fn dependency_omitted()                    { run("dependency_omitted"); }
+#[test] fn dependency_unmarked_attaches_marker()   { run("dependency_unmarked_attaches_marker"); }
 #[test] fn unmanaged_dependency_preserved()        { run("unmanaged_dependency_preserved"); }
 
 #[test] fn removal_in_sync_deletes()               { run("removal_in_sync_deletes"); }
+#[test] fn removal_dependency_in_sync_deletes()    { run("removal_dependency_in_sync_deletes"); }
+#[test] fn removal_array_in_sync_deletes()         { run("removal_array_in_sync_deletes"); }
 #[test] fn removal_overridden_left_alone()         { run("removal_overridden_left_alone"); }
 #[test] fn removal_stale_omit_warns()              { run("removal_stale_omit_warns"); }
+#[test] fn removal_conflict_blocks()               { run("removal_conflict_blocks"); }
 
+#[test] fn invalid_omit_warns()                    { run("invalid_omit_warns"); }
+#[test] fn mixed_states()                          { run("mixed_states"); }
 #[test] fn preserves_user_sections_and_comments()  { run("preserves_user_sections_and_comments"); }
 
 // ── Inline tests ─────────────────────────────────────────────────────
@@ -88,6 +103,26 @@ fn no_contributions_and_no_file_signals_no_file() {
     );
     assert!(outcome.actions.is_empty(), "no contributions ⇒ no actions");
     assert!(outcome.warnings.is_empty(), "no contributions ⇒ no warnings");
+}
+
+/// `Some("") + empty desired` is distinct from `None + empty desired`: a file
+/// exists on disk (it's just empty) and the adaptor must leave it alone.
+/// The `contents: None` signal is reserved for "no file should exist"; an
+/// existing empty file passes through unchanged so yard never silently
+/// deletes a file the user (or another tool) deliberately created.
+#[test]
+fn empty_existing_with_empty_desired_passes_through_unchanged() {
+    let outcome = PixiAdaptor
+        .plan(Vec::new(), Some(""), &dummy_runtime())
+        .expect("plan should succeed");
+    assert_eq!(
+        outcome.contents.as_deref(),
+        Some(""),
+        "empty file + no contributions must passthrough as Some(\"\"), got {:?}",
+        outcome.contents,
+    );
+    assert!(outcome.actions.is_empty(), "no managed keys ⇒ no actions");
+    assert!(outcome.warnings.is_empty(), "no managed keys ⇒ no warnings");
 }
 
 // ---- Merge ----

@@ -1,0 +1,2 @@
+[workspace]
+name = "myws"  # yard:managed default=not"valid"toml

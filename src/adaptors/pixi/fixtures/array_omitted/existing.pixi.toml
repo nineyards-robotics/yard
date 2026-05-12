@@ -1,0 +1,3 @@
+# yard:omit workspace.channels
+[workspace]
+name = "myws"  # yard:managed default="myws"

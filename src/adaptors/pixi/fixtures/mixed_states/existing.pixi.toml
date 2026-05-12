@@ -1,0 +1,8 @@
+# yard:omit dependencies.numpy
+[workspace]
+name = "myws"  # yard:managed default="myws"
+channels = ["x"]  # yard:managed default=["conda-forge"]
+
+[dependencies]
+python = "3.12"  # yard:overridden
+pandas = "*"

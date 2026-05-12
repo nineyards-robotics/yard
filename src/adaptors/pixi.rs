@@ -57,11 +57,19 @@ pub struct PixiDesired {
 
 /// Parse error surfaced when reconciling against a malformed `pixi.toml`.
 ///
-/// Per DESIGN.md §Classification, marker malformations (a `yard:managed`
-/// without a `default=` payload, a `default=` whose serialized form doesn't
-/// match the key's shape, etc.) are loud parse errors rather than silent
-/// re-classification: the file fails loud rather than letting yard silently
-/// take or lose ownership.
+/// Per DESIGN.md §Classification, marker malformations are loud parse errors
+/// rather than silent re-classification — the file fails loud rather than
+/// letting yard silently take or lose ownership. The two malformations that
+/// surface here are a `yard:managed` with no `default=` payload at all and a
+/// `default=` whose serialized form parses but to the wrong shape for the
+/// key it annotates.
+///
+/// A `default=` that fails to parse as TOML *at all* deliberately does not
+/// surface here: yard treats it as if the marker were missing, falling into
+/// the "unmarked" classification row and re-emitting a fresh marker with
+/// `default=<desired>`. Self-healing across yard upgrades wins over loud
+/// failure, and the on-disk value still gets re-asserted on the next apply
+/// (any value drift then surfaces as `Conflict`).
 #[derive(Debug, thiserror::Error)]
 #[error("{path}: {kind}", path = .path.display())]
 pub struct PixiParseError {
@@ -75,8 +83,6 @@ pub enum PixiParseErrorKind {
     InvalidToml(String),
     #[error("`{key}` carries `yard:managed` without a `default=` payload")]
     ManagedMissingDefault { key: String },
-    #[error("`{key}`'s `default=` payload could not be parsed: {detail}")]
-    UnparsableDefault { key: String, detail: String },
     #[error(
         "`{key}`'s `default=` payload is a {default_shape} but the key holds a {value_shape}"
     )]

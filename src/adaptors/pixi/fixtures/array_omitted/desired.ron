@@ -1,0 +1,4 @@
+PixiDesired(
+    workspace_name: Some("myws"),
+    channels: ["conda-forge"],
+)
