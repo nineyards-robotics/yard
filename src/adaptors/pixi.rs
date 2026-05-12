@@ -1,9 +1,21 @@
 //! `pixi.toml` adaptor — per-key comment marking strategy.
 //!
-//! Skeleton only at this stage. The semantic surface (channels, platforms,
-//! dependencies, tasks, workspace name) lands in Step 2, the reconciler in
-//! Step 3.
+//! yard owns individual keys inside `pixi.toml`, each carrying a trailing
+//! `# yard:managed default=<...>` marker. The user owns the surrounding
+//! table headers, blank lines, comments, and any keys yard does not manage.
+//!
+//! v1 surface (per DESIGN.md):
+//! - **Scalar**: `workspace.name` → `name = "<v>"  # yard:managed default="<v>"`.
+//! - **Array**: `workspace.channels` → element-level reconciliation. User-added
+//!   elements survive; removing one of yard's elements is a `Conflict`.
+//! - **Map of scalars**: each entry under `[dependencies]` is its own managed
+//!   key (`dependencies.<name>`); the `[dependencies]` *table* itself is the
+//!   user's, so untracked deps are preserved verbatim.
+//!
+//! Step 1 (this commit) defines the typed surface plus an exhaustive test
+//! suite; Step 2 lands the reconciler that turns those tests green.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -11,28 +23,85 @@ use serde::{Deserialize, Serialize};
 use crate::adaptors::{Adaptor, ApplyOutcome, MergeError, PlanError};
 use crate::{Contribution, RuntimeContext};
 
-/// Fragment a module wants merged into `pixi.toml`. Empty in Step 1; fields
-/// land in Step 2 alongside the merge rules.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
-pub struct PixiContribution {}
+/// Fragment a module wants merged into `pixi.toml`.
+///
+/// Every field is optional/empty by default so a module only mentions what
+/// it actually wants. Merging is per-field: scalars must agree across
+/// modules (else `MergeError`), arrays union with dedup, maps merge with
+/// per-key agreement.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PixiContribution {
+    /// Scalar at `[workspace] name`.
+    pub workspace_name: Option<String>,
+    /// Array at `[workspace] channels`. Element-level reconciliation —
+    /// user-added entries survive across applies.
+    pub channels: Vec<String>,
+    /// Map at `[dependencies]`. Keys are dep names, values are version
+    /// constraints (e.g. `"3.11"`, `">=1.20"`, `"*"`).
+    pub dependencies: BTreeMap<String, String>,
+}
 
-/// Merged intent the adaptor will reconcile against the on-disk `pixi.toml`.
+/// Merged intent the adaptor reconciles against the on-disk `pixi.toml`.
+///
+/// Shape mirrors [`PixiContribution`]; the merge collapses an iterator of
+/// contributions into one of these. `from_contributions` enforces the
+/// scalar-agreement rule per DESIGN.md §Modules→Merge.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
-pub struct PixiDesired {}
+#[serde(default, deny_unknown_fields)]
+pub struct PixiDesired {
+    pub workspace_name: Option<String>,
+    pub channels: Vec<String>,
+    pub dependencies: BTreeMap<String, String>,
+}
 
-/// Placeholder parse error for `pixi.toml`. Empty until the reconciler lands
-/// in Step 3 — kept for shape symmetry with `GitignoreParseError` so the
-/// type-erased `PlanError::Parse` envelope doesn't need any changes the day
-/// the first real pixi parse failure appears.
+/// Parse error surfaced when reconciling against a malformed `pixi.toml`.
+///
+/// Per DESIGN.md §Classification, marker malformations (a `yard:managed`
+/// without a `default=` payload, a `default=` whose serialized form doesn't
+/// match the key's shape, etc.) are loud parse errors rather than silent
+/// re-classification: the file fails loud rather than letting yard silently
+/// take or lose ownership.
 #[derive(Debug, thiserror::Error)]
-#[error("pixi parse error (unreachable until Step 3 lands)")]
-pub struct PixiParseError;
+#[error("{path}: {kind}", path = .path.display())]
+pub struct PixiParseError {
+    pub path: PathBuf,
+    pub kind: PixiParseErrorKind,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PixiParseErrorKind {
+    #[error("invalid TOML: {0}")]
+    InvalidToml(String),
+    #[error("`{key}` carries `yard:managed` without a `default=` payload")]
+    ManagedMissingDefault { key: String },
+    #[error("`{key}`'s `default=` payload could not be parsed: {detail}")]
+    UnparsableDefault { key: String, detail: String },
+    #[error(
+        "`{key}`'s `default=` payload is a {default_shape} but the key holds a {value_shape}"
+    )]
+    DefaultShapeMismatch {
+        key: String,
+        default_shape: &'static str,
+        value_shape: &'static str,
+    },
+}
 
 impl PixiDesired {
+    /// Collapse per-module contributions into a single merged desired.
+    ///
+    /// Rules per DESIGN.md §Modules→Merge:
+    /// - **Scalars** (`workspace_name`): all contributors must agree.
+    /// - **Arrays** (`channels`): union with order preserved; later
+    ///   modules' net-new items append, dedup is on equality.
+    /// - **Maps** (`dependencies`): per-key union; same key from two
+    ///   modules must agree on value.
     pub fn from_contributions<I>(_contribs: I) -> Result<Self, MergeError>
     where
         I: IntoIterator<Item = (&'static str, PixiContribution)>,
     {
+        // Step 2: real merge. Today this throws away inputs so the merge
+        // tests stay red.
         Ok(Self::default())
     }
 }
@@ -46,13 +115,16 @@ impl PixiAdaptor {
         ctx.workspace.join("pixi.toml")
     }
 
+    /// Apply the typed desired against the on-disk file. Step 1 stub: every
+    /// fixture's `expected.pixi.toml` records what the *real* reconciler
+    /// should emit, so this no-op makes every fixture red. Step 2 lands the
+    /// real reconciler.
     pub fn apply(
         &self,
         _desired: &PixiDesired,
         existing: Option<&str>,
         _ctx: &RuntimeContext,
     ) -> Result<ApplyOutcome, PixiParseError> {
-        // Skeleton: no-op until Step 3 lands the per-key marker logic.
         Ok(ApplyOutcome {
             contents: Some(existing.unwrap_or_default().to_string()),
             actions: Vec::new(),
@@ -84,10 +156,9 @@ impl Adaptor for PixiAdaptor {
             ),
         });
         let desired = PixiDesired::from_contributions(mine)?;
-        // Skeleton: with no file on disk, signal "no file" so the engine
-        // doesn't create an empty `pixi.toml`. Real logic — including
-        // when to *actively* delete an existing pixi.toml — lands in
-        // Step 3.
+        // Step 1 stub: with no file on disk and no managed keys, signal
+        // "no file" so the engine doesn't create an empty `pixi.toml`.
+        // Step 2 makes this decision based on the merged desired.
         if existing.is_none() {
             return Ok(ApplyOutcome {
                 contents: None,
@@ -101,3 +172,6 @@ impl Adaptor for PixiAdaptor {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

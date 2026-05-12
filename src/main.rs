@@ -93,5 +93,8 @@ fn print_action(action: &KeyAction) {
         KeyAction::Overridden { key } => println!("  overridden  {key}"),
         KeyAction::Deleted { key, .. } => println!("  deleted     {key}"),
         KeyAction::Omitted { key } => println!("  omitted     {key}"),
+        KeyAction::Conflict { key, on_disk, default } => {
+            println!("  conflict    {key} (on-disk={on_disk:?}, default={default:?})");
+        }
     }
 }

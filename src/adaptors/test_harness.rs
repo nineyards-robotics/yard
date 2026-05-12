@@ -76,6 +76,7 @@ pub fn format_actions(actions: &[KeyAction]) -> String {
             KeyAction::Overridden { key } => ("Overridden", key),
             KeyAction::Deleted { key, .. } => ("Deleted", key),
             KeyAction::Omitted { key } => ("Omitted", key),
+            KeyAction::Conflict { key, .. } => ("Conflict", key),
         };
         out.push_str(&format!("{kind} {key}\n"));
     }

@@ -1,0 +1,2 @@
+[workspace]
+channels = ["my-only-channel"]  # yard:overridden

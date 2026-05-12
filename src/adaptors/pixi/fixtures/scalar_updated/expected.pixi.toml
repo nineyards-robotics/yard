@@ -1,0 +1,2 @@
+[workspace]
+name = "newname"  # yard:managed default="newname"

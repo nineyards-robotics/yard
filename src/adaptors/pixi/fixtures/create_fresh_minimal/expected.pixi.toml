@@ -1,0 +1,3 @@
+[workspace]
+name = "myws"  # yard:managed default="myws"
+channels = ["conda-forge"]  # yard:managed default=["conda-forge"]

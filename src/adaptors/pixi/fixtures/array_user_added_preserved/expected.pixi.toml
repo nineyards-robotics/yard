@@ -1,0 +1,2 @@
+[workspace]
+channels = ["conda-forge", "robostack-jazzy", "my-channel"]  # yard:managed default=["conda-forge","robostack-jazzy"]

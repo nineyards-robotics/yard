@@ -111,6 +111,17 @@ pub enum KeyAction {
     /// because it would otherwise re-emit, or because it has nothing to
     /// emit and the omit is stale — the latter also produces a warning).
     Omitted { key: String },
+    /// Marker says `yard:managed` but the on-disk value diverges from the
+    /// recorded `default=`. Per DESIGN.md §Classification, conflicts are
+    /// loud: the engine collects them across every adaptor and, if any
+    /// are present, blocks the whole apply until the user resolves them
+    /// (revert to `default=`, or rewrite the marker as `yard:overridden`).
+    /// `on_disk` is the diverged value; `default` is what `default=` recorded.
+    Conflict {
+        key: String,
+        on_disk: String,
+        default: String,
+    },
 }
 
 /// One planning-phase failure surfaced by [`Adaptor::plan`]. The engine
