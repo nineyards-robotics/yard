@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yard"
+version = "0.1.0"
+description = "A CLI tool for ROS 2 dev environments and deployment."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Alistair" },
+]
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yard"]
