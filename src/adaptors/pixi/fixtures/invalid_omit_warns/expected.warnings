@@ -1,1 +1,0 @@
-yard:omit `project python` is not a valid key path (allowed: [A-Za-z0-9_.-]+); ignoring

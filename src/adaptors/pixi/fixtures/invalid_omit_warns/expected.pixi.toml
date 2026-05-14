@@ -1,3 +1,0 @@
-# yard:omit project python
-[workspace]
-name = "myws"  # yard:managed default="myws"

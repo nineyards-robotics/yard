@@ -1,7 +1,0 @@
-[workspace]
-name = "myws"  # yard:managed default="myws"
-channels = ["conda-forge"]  # yard:managed default=["conda-forge"]
-
-[dependencies]
-numpy = ">=1.20"  # yard:managed default=">=1.20"
-python = "3.11"  # yard:managed default="3.11"

@@ -1,6 +1,0 @@
-# user prefs
-secret.env
-
-# >>> yard:managed id=standard-ignores >>>
-build/
-# <<< yard:managed id=standard-ignores <<<

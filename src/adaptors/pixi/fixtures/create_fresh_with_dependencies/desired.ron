@@ -1,8 +1,0 @@
-PixiDesired(
-    workspace_name: Some("myws"),
-    channels: ["conda-forge"],
-    dependencies: {
-        "python": "3.11",
-        "numpy": ">=1.20",
-    },
-)

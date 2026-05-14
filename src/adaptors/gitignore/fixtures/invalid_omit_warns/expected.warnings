@@ -1,1 +1,0 @@
-yard:omit `project.python` is not a valid id slug (allowed: [A-Za-z0-9_-]+); ignoring

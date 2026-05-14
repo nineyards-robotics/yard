@@ -1,4 +1,0 @@
-# >>> yard:managed id=standard-ignores >>>
-build/
-install/
-# <<< yard:managed id=standard-ignores <<<

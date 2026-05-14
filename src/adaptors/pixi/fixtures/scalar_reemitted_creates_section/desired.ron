@@ -1,4 +1,0 @@
-PixiDesired(
-    workspace_name: Some("myws"),
-    dependencies: {"python": "3.11"},
-)

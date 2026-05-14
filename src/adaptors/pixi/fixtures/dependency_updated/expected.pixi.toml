@@ -1,2 +1,0 @@
-[dependencies]
-python = "3.12"  # yard:managed default="3.12"

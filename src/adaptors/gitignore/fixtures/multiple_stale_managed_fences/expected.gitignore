@@ -1,8 +1,0 @@
-# top user content
-.env
-
-# middle user content
-*.tmp
-
-# bottom user content
-*.bak

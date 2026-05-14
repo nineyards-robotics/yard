@@ -1,1 +1,0 @@
-yard:omit `standard-ignores` does not match any currently-managed fence in .gitignore

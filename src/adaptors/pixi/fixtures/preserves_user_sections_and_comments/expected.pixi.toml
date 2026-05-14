@@ -1,9 +1,0 @@
-# user header comment
-[workspace]
-name = "myws"  # yard:managed default="myws"
-
-# user's own section comment
-[tool.foo]
-bar = 42
-
-# trailing user comment

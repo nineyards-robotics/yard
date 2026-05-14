@@ -1,2 +1,0 @@
-[workspace]
-channels = ["conda-forge", "my-channel"]  # yard:managed default=["conda-forge"]
