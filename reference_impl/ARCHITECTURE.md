@@ -94,32 +94,6 @@ This coupling is *intentional*. It's the same pattern as importing a library
 to use its API. The alternative (stringly-typed intents) gives you decoupling
 at the cost of all type safety — bad trade.
 
-## Discovery via entry points
-
-Both ConfigFiles and Modules register via standard Python entry points:
-
-```toml
-# yard's own pyproject.toml
-[project.entry-points."yard.config_files"]
-pixi_toml = "yard.config_files.pixi:PixiToml"
-gitignore = "yard.config_files.gitignore:GitIgnore"
-colcon = "yard.config_files.colcon:ColconConfig"
-
-[project.entry-points."yard.modules"]
-ros_workspace = "yard.modules.ros_workspace:RosWorkspaceModule"
-```
-
-```toml
-# third-party extension's pyproject.toml
-[project.entry-points."yard.config_files"]
-my_config = "my_yard_ext.configs:MyCustomConfig"
-
-[project.entry-points."yard.modules"]
-my_module = "my_yard_ext.modules:MyModule"
-```
-
-At startup, yard loads all entry points to build the type registry.
-
 ## yard.toml
 
 The user-facing config. Read-only input to modules.
@@ -134,30 +108,12 @@ enabled = true
 [modules.my_custom_module]
 enabled = true
 extra_packages = ["nav2", "moveit"]
+
+[custom_pkgs]
+paths = ["importable.path"]  # package can include modules and file types. A package will have a standardised entrypoint for discovering modules and file types (e.g. pkg.modules and .files are two lists of types)
 ```
 
-Each module gets its own config section. The module reads it via
-`ctx.yard_config.module_config("ros_workspace")` or similar typed accessor.
-
-## Execution flow
-
-```
-1.  Parse yard.toml → YardConfig
-2.  Discover all ConfigFile types via entry points → type registry
-3.  Discover all Module types via entry points
-4.  Filter to enabled modules (from yard.toml)
-5.  Create Context (with type registry, YardConfig, workspace root)
-6.  For each enabled module (in dependency order):
-        module.configure(ctx)
-        # module calls ctx.config(T) to get typed ConfigFile instances
-        # module calls methods like pixi.dependency("foo")
-        # ConfigFile accumulates desired state internally
-7.  For each instantiated ConfigFile:
-        config_file.apply()
-        # reads on-disk file
-        # reconciles desired state vs on-disk via marker system
-        # writes updated file (or reports conflicts)
-```
+Each module gets its own config section. Modules declare their config and yard will build this config object from the yaml and then automatically feed it to them.
 
 ## Conflict between modules
 
